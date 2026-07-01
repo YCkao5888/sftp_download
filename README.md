@@ -7,6 +7,7 @@
 - `downloader.py`：下載核心邏輯（連線、斷線重連、斷點續傳、Log）。
 - `gui.py`：圖形化介面。
 - `settings.py`：設定檔（`settings.json`）讀取/開啟工具，CLI 與 GUI 共用。
+- `example_settings.json`：設定檔範本，複製改名為 `settings.json` 後填入實際值即可使用。
 
 ---
 
@@ -34,7 +35,9 @@ python main.py
 ```
 會跳出視窗。若工具資料夾內已有 `settings.json`，畫面欄位會自動帶入其中的值（見下方【設定檔】章節）；否則請自行依序填入：SFTP 主機、Port、**裝置名稱**、帳號、密碼、來源路徑、本地端儲存路徑，勾選需要的功能（斷線重連 / 斷點續傳 / 網路偵測自動下載 / 上傳 Log），按下「開始下載」即可。畫面下方會即時顯示執行紀錄。
 
-畫面右上角的「開啟設定檔」按鈕可直接開啟 `settings.json`（若尚未建立，會先用目前畫面上的值建立一份）供編輯；編輯儲存後需**重新啟動程式**才會套用新值。
+畫面左上角的「載入設定檔...」按鈕可挑選任一份設定檔（例如同一台裝置用來下載不同資料夾的 `settings_A.json`、`settings_B.json`），選擇後畫面欄位會立刻換成該檔案的內容，視窗標題也會顯示目前使用的是哪一份設定檔；「開始下載」時就會用當下載入的這份設定檔資料。
+
+右上角的「開啟設定檔」按鈕會開啟**目前已載入**的那份設定檔（未手動切換過的話就是預設的 `settings.json`）供編輯；若尚未有對應檔案，會先用目前畫面上的值建立一份。編輯儲存後，回到程式按「載入設定檔...」重新選一次同一份檔案即可套用變更，不需要重新啟動程式。
 
 ### CLI 模式（適合排程自動化，如 Windows 工作排程器 / Linux cron）
 
@@ -70,14 +73,37 @@ export SFTP_PASSWORD="your_password"
 | `--upload-log --log-remote-dir /data/logs` | 下載結束後把 Log 上傳回 SFTP 指定目錄 |
 | `--key-file id_rsa` | 使用 SSH 私鑰登入，取代密碼 |
 | `--retry-count 10` | 重試次數上限；不指定或填 `0` 代表無限次重試（預設無限次） |
+| `--config settings_A.json` | 指定要讀取的設定檔路徑（預設讀取工具資料夾內的 `settings.json`） |
 
 完整參數說明可執行 `python main.py --help` 查看。
+
+#### 同一台裝置要下載多組不同的來源/本地路徑
+
+如果同一台裝置需要從 SFTP 上多個不同的資料夾下載到不同的本地端路徑（例如同時同步 `/data/A` 到 `C:\A`、又要同步 `/data/B` 到 `D:\B`），做法是**每一組路徑各自準備一份設定檔，並各排一個排程任務**，用 `--config` 指定要用哪一份：
+
+1. 複製 `example_settings.json` 建立多份設定檔，例如 `settings_A.json`、`settings_B.json`，各自填入對應的 `remote_path` / `local_path`（`host`、帳密等共同欄位可以重複，也可以各自不同）。
+2. 排程任務各自指定要用的設定檔：
+   ```
+   python main.py --cli --config settings_A.json
+   python main.py --cli --config settings_B.json
+   ```
+3. 每份設定檔各自獨立連線、獨立產生 Log（檔名同樣會標示 `device_name`），彼此不會互相影響；若想在 Log 裡進一步分辨是哪一組路徑，可以把 `device_name` 也取成不同的名稱（如 `edge-101-A`、`edge-101-B`）。
+
+> GUI 一次仍只會執行單一組來源/本地路徑，但可以用左上角的「載入設定檔...」按鈕手動切換要用 `settings_A.json` 還是 `settings_B.json` 再按「開始下載」，適合手動操作的情境；**排程自動化仍建議用上述 CLI + `--config` 的方式**，讓每組路徑各自跑一個排程任務，不需要人在旁邊切換。
 
 ---
 
 ## 【設定檔 settings.json（可省略重複輸入參數）】
 
 工具資料夾內若有 `settings.json`，CLI 與 GUI 都會自動讀取其中的值當作預設參數；**command line 上明確帶入的參數優先權最高，其次才是 settings.json，最後才是程式內建預設值**。適合上百台 edge device 各自放一份自己的 `settings.json`，之後直接排程執行即可，不必每次重複輸入一長串參數。
+
+工具資料夾內附有 `example_settings.json` 作為範本，複製一份改名為 `settings.json` 再依下方欄位說明填入實際值即可（`settings.json` 內含帳密，已列在 `.gitignore` 不會被版本控制追蹤；`example_settings.json` 沒有真實密碼，可安心放入版本控制供其他裝置/人員參考複製）：
+```
+# Windows (PowerShell)
+Copy-Item example_settings.json settings.json
+# Linux
+cp example_settings.json settings.json
+```
 
 - GUI 畫面右上角有「開啟設定檔」按鈕：若尚未有 `settings.json`，會先用目前畫面上已填的值建立一份，再用系統預設程式（如記事本）開啟；編輯儲存後**需重新啟動程式**才會套用。
 - CLI 沒有對應按鈕，請直接用文字編輯器開啟工具資料夾內的 `settings.json` 編輯。

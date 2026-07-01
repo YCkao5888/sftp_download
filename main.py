@@ -25,6 +25,11 @@ def build_parser():
         action="store_true",
         help="強制以 CLI 模式執行（不開啟 GUI）。當所有必要參數都已寫在 settings.json 時，可單獨帶這個旗標即可，不需重複輸入其他參數",
     )
+    parser.add_argument(
+        "--config",
+        help="指定要讀取的設定檔路徑（預設為工具資料夾內的 settings.json）。"
+        "適合同一台裝置需要下載多組不同的 SFTP 來源/本地路徑時，每組各自用一份設定檔、各排一個排程任務",
+    )
     parser.add_argument("--host", help="SFTP 主機位址")
     parser.add_argument("--port", type=int, help="SFTP 連接埠（預設 22）")
     parser.add_argument("--username", help="SFTP 帳號")
@@ -56,7 +61,7 @@ def _resolve(cli_value, settings, key, fallback=None):
 
 
 def run_cli(args):
-    settings = load_settings()
+    settings = load_settings(args.config) if args.config else load_settings()
 
     host = _resolve(args.host, settings, "host")
     port = _resolve(args.port, settings, "port", 22)

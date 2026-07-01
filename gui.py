@@ -14,11 +14,12 @@ DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 class SFTPDownloaderGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("SFTP 自動化下載工具")
         self.downloader = None
-        self.settings = load_settings()
+        self.settings_path = SETTINGS_PATH
+        self.settings = load_settings(self.settings_path)
         self._build_widgets()
         self._apply_settings_to_fields()
+        self._update_title()
 
     def _build_widgets(self):
         pad = {"padx": 6, "pady": 4}
@@ -26,8 +27,11 @@ class SFTPDownloaderGUI:
         frm.grid(row=0, column=0, sticky="nsew", **pad)
 
         row = 0
+        ttk.Button(frm, text="載入設定檔...", command=self._load_settings_file).grid(
+            row=row, column=0, columnspan=2, sticky="w", **pad
+        )
         ttk.Button(frm, text="開啟設定檔", command=self._open_settings_file).grid(
-            row=row, column=0, columnspan=4, sticky="e", **pad
+            row=row, column=2, columnspan=2, sticky="e", **pad
         )
 
         row += 1
@@ -117,6 +121,23 @@ class SFTPDownloaderGUI:
         self.remote_log_dir_var.set(s.get("log_remote_dir", self.remote_log_dir_var.get()))
         self._toggle_log_dir()
 
+    def _update_title(self):
+        self.root.title(f"SFTP 自動化下載工具 - {self.settings_path.name}")
+
+    def _load_settings_file(self):
+        chosen = filedialog.askopenfilename(
+            title="選擇設定檔",
+            initialdir=str(self.settings_path.parent),
+            filetypes=[("JSON 設定檔", "*.json"), ("所有檔案", "*.*")],
+        )
+        if not chosen:
+            return
+        self.settings_path = Path(chosen)
+        self.settings = load_settings(self.settings_path)
+        self._apply_settings_to_fields()
+        self._update_title()
+        self.status_var.set(f"已載入設定檔：{self.settings_path.name}")
+
     def _open_settings_file(self):
         try:
             port = int(self.port_var.get().strip() or "22")
@@ -136,9 +157,9 @@ class SFTPDownloaderGUI:
             "upload_log": self.upload_log_var.get(),
             "log_remote_dir": self.remote_log_dir_var.get().strip(),
         }
-        ensure_settings_file(seed=seed)
-        open_in_default_app(SETTINGS_PATH)
-        messagebox.showinfo("設定檔", f"已開啟設定檔：\n{SETTINGS_PATH}\n\n編輯並儲存後，請重新啟動程式以套用變更。")
+        ensure_settings_file(self.settings_path, seed=seed)
+        open_in_default_app(self.settings_path)
+        messagebox.showinfo("設定檔", f"已開啟設定檔：\n{self.settings_path}\n\n編輯並儲存後，請按「載入設定檔」重新載入（或重新啟動程式）以套用變更。")
 
     def _browse_local_path(self):
         path = filedialog.askdirectory()
