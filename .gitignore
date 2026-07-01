@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+/dist/
+/build/
+.syncrun/
+tmp/
+log/
+logs/
+settings.json
+settings_*.json
+!example_settings.json
