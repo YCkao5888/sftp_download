@@ -37,6 +37,10 @@ def build_parser():
         "--device-name",
         help="裝置/使用者識別名稱，用於標示 Log 是哪一台設備所產生（多台 edge device 共用同一 SFTP 帳號時仍可分辨）",
     )
+    parser.add_argument(
+        "--version-info",
+        help="選填的上傳版號資訊，會一併記錄在 Log 中，不影響下載邏輯",
+    )
     parser.add_argument("--password", help="SFTP 密碼（可用環境變數 SFTP_PASSWORD 取代，避免明碼留在指令紀錄）")
     parser.add_argument("--key-file", help="SSH 私鑰檔路徑（若使用金鑰登入，取代 --password）")
     parser.add_argument("--remote-path", help="SFTP 來源路徑（檔案或目錄）")
@@ -51,6 +55,15 @@ def build_parser():
     parser.add_argument("--upload-log", action="store_true", help="下載結束後將 Log 上傳回 SFTP")
     parser.add_argument("--log-remote-dir", help="上傳 Log 的 SFTP 目錄（搭配 --upload-log 使用）")
     parser.add_argument("--log-dir", help="本地端 Log 儲存目錄（預設 ./logs）")
+    parser.add_argument(
+        "--duplicate-mode",
+        choices=["duplicate", "overwrite"],
+        help="來源檔案偵測到已更新版本時的處理方式：duplicate=另存新檔（預設）、overwrite=直接覆蓋舊檔案",
+    )
+    parser.add_argument(
+        "--duplicate-suffix",
+        help="duplicate-mode 為 duplicate 時，另存新檔用的檔名後綴（預設 copy，第二次更新起會自動加上流水號 copy1、copy2...）",
+    )
     return parser
 
 
@@ -66,6 +79,7 @@ def run_cli(args):
     host = _resolve(args.host, settings, "host")
     port = _resolve(args.port, settings, "port", 22)
     device_name = _resolve(args.device_name, settings, "device_name")
+    version_info = _resolve(args.version_info, settings, "version_info", "")
     username = _resolve(args.username, settings, "username")
     key_file = _resolve(args.key_file, settings, "key_file")
     remote_path = _resolve(args.remote_path, settings, "remote_path")
@@ -75,6 +89,8 @@ def run_cli(args):
     log_remote_dir = _resolve(args.log_remote_dir, settings, "log_remote_dir")
     # log_dir 留空字串代表「未設定」，不像 retry_count=0 是有意義的值，因此用 or 串接才能正確回退到預設值。
     log_dir = args.log_dir or settings.get("log_dir") or str(DEFAULT_LOG_DIR)
+    duplicate_mode = args.duplicate_mode or settings.get("duplicate_mode") or "duplicate"
+    duplicate_suffix = args.duplicate_suffix or settings.get("duplicate_suffix") or "copy"
 
     # 布林旗標：settings.json 提供基準值，CLI 的 --no-* / --upload-log 只能單向覆蓋（關閉/開啟）。
     auto_reconnect = False if args.no_auto_reconnect else bool(settings.get("auto_reconnect", True))
@@ -104,7 +120,7 @@ def run_cli(args):
     if not key_file and not password:
         password = getpass.getpass(f"請輸入 {username}@{host} 的密碼: ")
 
-    logger, log_file = create_logger(log_dir, device_name)
+    logger, log_file = create_logger(log_dir, device_name, version_info)
     downloader = SFTPDownloader(
         host=host,
         port=port,
@@ -120,6 +136,8 @@ def run_cli(args):
         retry_delay=retry_delay,
         upload_log=upload_log,
         remote_log_dir=log_remote_dir,
+        duplicate_mode=duplicate_mode,
+        duplicate_suffix=duplicate_suffix,
         logger=logger,
         log_file=log_file,
     )

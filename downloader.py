@@ -1,6 +1,7 @@
 """SFTP 下載核心邏輯：連線、斷線重連、斷點續傳、Log 紀錄與回傳。"""
 
 import csv
+import json
 import logging
 import os
 import re
@@ -15,6 +16,7 @@ import paramiko
 CHUNK_SIZE = 32768
 SOCKET_TIMEOUT = 30
 KEEPALIVE_INTERVAL = 15
+MANIFEST_FILENAME = ".sftp_download_manifest.json"
 
 _FILENAME_UNSAFE = re.compile(r'[<>:"/\\|?*]')
 
@@ -30,19 +32,22 @@ def format_size(num_bytes):
 class _CSVFileHandler(logging.Handler):
     """把 Log 寫成 CSV，方便日後把上百台裝置的 Log 彙整成同一份表格用 Excel 檢視。"""
 
-    def __init__(self, filename, device_name):
+    def __init__(self, filename, device_name, version_info=""):
         super().__init__()
         self._device_name = device_name
+        self._version_info = version_info
         # utf-8-sig：讓 Excel 開啟時能正確辨識 UTF-8 中文，不會顯示成亂碼。
         self._file = open(filename, "w", newline="", encoding="utf-8-sig")
         self._writer = csv.writer(self._file)
-        self._writer.writerow(["timestamp", "device_name", "level", "message"])
+        self._writer.writerow(["timestamp", "device_name", "version_info", "level", "message"])
         self._file.flush()
 
     def emit(self, record):
         try:
             timestamp = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
-            self._writer.writerow([timestamp, self._device_name, record.levelname, record.getMessage()])
+            self._writer.writerow(
+                [timestamp, self._device_name, self._version_info, record.levelname, record.getMessage()]
+            )
             self._file.flush()
         except Exception:
             self.handleError(record)
@@ -55,8 +60,9 @@ class _CSVFileHandler(logging.Handler):
         super().close()
 
 
-def create_logger(log_dir, device_name, log_callback=None):
-    """device_name 用於標示這份 Log 屬於哪一台設備/使用者（多台 edge device 共用同一 SFTP 帳號時仍可分辨）。"""
+def create_logger(log_dir, device_name, version_info="", log_callback=None):
+    """device_name 用於標示這份 Log 屬於哪一台設備/使用者（多台 edge device 共用同一 SFTP 帳號時仍可分辨）。
+    version_info 為選填的上傳版號資訊，會一併記錄在 Log 中，不影響任何下載邏輯。"""
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     safe_device_name = _FILENAME_UNSAFE.sub("_", device_name).strip() or "unknown"
@@ -67,9 +73,12 @@ def create_logger(log_dir, device_name, log_callback=None):
     logger.handlers.clear()
     logger.propagate = False
 
-    fmt = logging.Formatter(f"%(asctime)s [%(levelname)s] [{device_name}] %(message)s", "%Y-%m-%d %H:%M:%S")
+    version_tag = f"[{version_info}]" if version_info else ""
+    fmt = logging.Formatter(
+        f"%(asctime)s [%(levelname)s] [{device_name}]{version_tag} %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
 
-    csv_handler = _CSVFileHandler(log_file, device_name)
+    csv_handler = _CSVFileHandler(log_file, device_name, version_info)
     logger.addHandler(csv_handler)
 
     console_handler = logging.StreamHandler()
@@ -105,6 +114,8 @@ class SFTPDownloader:
         retry_delay=10,
         upload_log=False,
         remote_log_dir=None,
+        duplicate_mode="duplicate",
+        duplicate_suffix="copy",
         logger=None,
         log_file=None,
     ):
@@ -122,11 +133,14 @@ class SFTPDownloader:
         self.retry_delay = retry_delay
         self.upload_log = upload_log
         self.remote_log_dir = remote_log_dir
+        self.duplicate_mode = duplicate_mode or "duplicate"  # "duplicate"（另存新檔）或 "overwrite"（直接覆蓋）
+        self.duplicate_suffix = duplicate_suffix or "copy"
         self.logger = logger
         self.log_file = log_file
 
         self.client = None
         self.sftp = None
+        self._manifest = {}
 
     def _retry_limit_reached(self, attempts):
         if self.retry_count is None or self.retry_count <= 0:
@@ -212,14 +226,57 @@ class SFTPDownloader:
             else:
                 files.append((remote_path, rel_path))
 
+    def _manifest_path(self, local_root):
+        return local_root / MANIFEST_FILENAME
+
+    def _load_manifest(self, local_root):
+        path = self._manifest_path(local_root)
+        if not path.exists():
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            self.logger.warning(f"版本紀錄檔讀取失敗，將視為未追蹤過任何檔案: {e}")
+            return {}
+
+    def _save_manifest(self, local_root):
+        try:
+            with open(self._manifest_path(local_root), "w", encoding="utf-8") as f:
+                json.dump(self._manifest, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            self.logger.warning(f"版本紀錄檔寫入失敗: {e}")
+
+    def _next_duplicate_path(self, local_file):
+        candidate = local_file.with_name(f"{local_file.stem}_{self.duplicate_suffix}{local_file.suffix}")
+        n = 1
+        while candidate.exists():
+            candidate = local_file.with_name(f"{local_file.stem}_{self.duplicate_suffix}{n}{local_file.suffix}")
+            n += 1
+        return candidate
+
     def _download_one_file(self, remote_file, rel_path, local_root):
         local_file = local_root / Path(*rel_path.split("/"))
         local_file.parent.mkdir(parents=True, exist_ok=True)
-        remote_size = self.sftp.stat(remote_file).st_size
+        remote_stat = self.sftp.stat(remote_file)
+        remote_size = remote_stat.st_size
+        remote_mtime = int(remote_stat.st_mtime)
+
+        known = self._manifest.get(rel_path) if self.resume else None
+        target_file = local_file
+        local_size = 0
+        mode = "wb"
 
         if not self.resume:
-            local_size = 0
-            mode = "wb"
+            pass
+        elif known is not None and (known.get("size") != remote_size or known.get("mtime") != remote_mtime):
+            # 之前已追蹤過這個遠端檔案的版本，但這次抓到的 size/mtime 跟上次不同 -> 來源已更新。
+            # 用新版內容接續舊版檔案會造成資料混雜，因此不論哪種模式都一定是整份重新下載（mode 維持 "wb"）。
+            if self.duplicate_mode == "overwrite":
+                self.logger.info(f"偵測到來源檔案已更新（版本與上次紀錄不同），覆蓋舊檔案: {rel_path}")
+            else:
+                target_file = self._next_duplicate_path(local_file)
+                self.logger.info(f"偵測到來源檔案已更新（版本與上次紀錄不同），另存為: {target_file.name}")
         elif local_file.exists():
             local_size = local_file.stat().st_size
             if local_size == remote_size:
@@ -228,18 +285,14 @@ class SFTPDownloader:
             elif local_size > remote_size:
                 self.logger.warning(f"本地檔案大於遠端檔案，重新下載: {rel_path}")
                 local_size = 0
-                mode = "wb"
             else:
                 mode = "ab"
-        else:
-            local_size = 0
-            mode = "wb"
 
         self.logger.info(f"開始下載: {rel_path} ({format_size(remote_size)})")
         last_pct_logged = -1
         with self.sftp.open(remote_file, "rb") as remote_f:
             remote_f.seek(local_size)
-            with open(local_file, mode) as local_f:
+            with open(target_file, mode) as local_f:
                 transferred = local_size
                 while True:
                     chunk = remote_f.read(CHUNK_SIZE)
@@ -252,7 +305,12 @@ class SFTPDownloader:
                         if pct > last_pct_logged:
                             self.logger.info(f"  {rel_path} 進度: {pct}%")
                             last_pct_logged = pct
-        self.logger.info(f"完成下載: {rel_path}")
+        self.logger.info(f"完成下載: {target_file.name if target_file != local_file else rel_path}")
+
+        if self.resume:
+            self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
+            self._save_manifest(local_root)
+
         return "downloaded"
 
     def _upload_log_file(self):
@@ -273,6 +331,7 @@ class SFTPDownloader:
         self.logger.info("=== SFTP 下載任務開始 ===")
         local_root = Path(self.local_path)
         local_root.mkdir(parents=True, exist_ok=True)
+        self._manifest = self._load_manifest(local_root) if self.resume else {}
 
         downloaded, skipped, failed = 0, 0, []
         try:

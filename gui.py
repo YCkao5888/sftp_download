@@ -59,25 +59,19 @@ class SFTPDownloaderGUI:
         self.port_var = tk.StringVar(value="22")
         ttk.Entry(conn_frame, textvariable=self.port_var, width=8).grid(row=0, column=3, sticky="w", **pad)
 
-        ttk.Label(conn_frame, text="裝置名稱 *").grid(row=1, column=0, sticky="w", **pad)
-        self.device_name_var = tk.StringVar()
-        ttk.Entry(conn_frame, textvariable=self.device_name_var).grid(
-            row=1, column=1, columnspan=3, sticky="we", **pad
-        )
-
-        ttk.Label(conn_frame, text="SFTP 帳號 *").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Label(conn_frame, text="SFTP 帳號 *").grid(row=1, column=0, sticky="w", **pad)
         self.username_var = tk.StringVar()
-        ttk.Entry(conn_frame, textvariable=self.username_var).grid(row=2, column=1, sticky="we", **pad)
+        ttk.Entry(conn_frame, textvariable=self.username_var).grid(row=1, column=1, sticky="we", **pad)
 
-        ttk.Label(conn_frame, text="SFTP 密碼 *").grid(row=2, column=2, sticky="w", **pad)
+        ttk.Label(conn_frame, text="SFTP 密碼 *").grid(row=1, column=2, sticky="w", **pad)
         self.password_var = tk.StringVar()
-        ttk.Entry(conn_frame, textvariable=self.password_var, show="*").grid(row=2, column=3, sticky="we", **pad)
+        ttk.Entry(conn_frame, textvariable=self.password_var, show="*").grid(row=1, column=3, sticky="we", **pad)
 
         ttk.Label(
             conn_frame,
             text="（若已在設定檔中設定 key_file 金鑰登入，密碼可留空）",
             foreground="#777777",
-        ).grid(row=3, column=0, columnspan=4, sticky="w", padx=6)
+        ).grid(row=2, column=0, columnspan=4, sticky="w", padx=6)
 
         # --- 下載路徑（必填） ---
         path_frame = ttk.LabelFrame(outer, text="下載路徑", padding=8)
@@ -112,19 +106,48 @@ class SFTPDownloaderGUI:
             row=0, column=2, sticky="w", **pad
         )
 
-        # --- Log 設定（選填） ---
-        log_frame = ttk.LabelFrame(outer, text="Log 設定（選填）", padding=8)
+        ttk.Label(adv_frame, text="來源檔案更新時：").grid(row=1, column=0, sticky="w", **pad)
+        self.duplicate_mode_var = tk.StringVar(value="duplicate")
+        ttk.Radiobutton(
+            adv_frame, text="另存新檔", value="duplicate", variable=self.duplicate_mode_var,
+            command=self._toggle_duplicate_suffix,
+        ).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Radiobutton(
+            adv_frame, text="直接覆蓋", value="overwrite", variable=self.duplicate_mode_var,
+            command=self._toggle_duplicate_suffix,
+        ).grid(row=1, column=2, sticky="w", **pad)
+
+        ttk.Label(adv_frame, text="另存新檔後綴：").grid(row=2, column=0, sticky="w", **pad)
+        self.duplicate_suffix_var = tk.StringVar(value="copy")
+        self.duplicate_suffix_entry = ttk.Entry(adv_frame, textvariable=self.duplicate_suffix_var, width=12)
+        self.duplicate_suffix_entry.grid(row=2, column=1, sticky="w", **pad)
+        ttk.Label(
+            adv_frame, text="例：copy → 更新時存為 name_copy.ext，再更新則 name_copy1.ext、copy2...",
+            foreground="#777777",
+        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=6)
+
+        # --- Log 設定 ---
+        log_frame = ttk.LabelFrame(outer, text="Log 設定", padding=8)
         log_frame.grid(row=6, column=0, sticky="we", pady=(0, 8))
-        log_frame.columnconfigure(2, weight=1)
+        log_frame.columnconfigure(1, weight=1)
+        log_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(log_frame, text="裝置名稱 *").grid(row=0, column=0, sticky="w", **pad)
+        self.device_name_var = tk.StringVar()
+        ttk.Entry(log_frame, textvariable=self.device_name_var).grid(row=0, column=1, sticky="we", **pad)
+
+        ttk.Label(log_frame, text="上傳版號資訊（選填）").grid(row=0, column=2, sticky="w", **pad)
+        self.version_info_var = tk.StringVar()
+        ttk.Entry(log_frame, textvariable=self.version_info_var).grid(row=0, column=3, sticky="we", **pad)
 
         self.upload_log_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             log_frame, text="完成後將 Log 上傳回 SFTP", variable=self.upload_log_var, command=self._toggle_log_dir
-        ).grid(row=0, column=0, sticky="w", **pad)
-        ttk.Label(log_frame, text="上傳目錄：").grid(row=0, column=1, sticky="e", **pad)
+        ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(log_frame, text="上傳目錄：").grid(row=1, column=2, sticky="e", **pad)
         self.remote_log_dir_var = tk.StringVar()
         self.remote_log_dir_entry = ttk.Entry(log_frame, textvariable=self.remote_log_dir_var, state="disabled")
-        self.remote_log_dir_entry.grid(row=0, column=2, sticky="we", **pad)
+        self.remote_log_dir_entry.grid(row=1, column=3, sticky="we", **pad)
 
         # --- 執行 ---
         self.start_button = ttk.Button(outer, text="開始下載", command=self._start_download)
@@ -143,6 +166,10 @@ class SFTPDownloaderGUI:
         state = "normal" if self.upload_log_var.get() else "disabled"
         self.remote_log_dir_entry.config(state=state)
 
+    def _toggle_duplicate_suffix(self):
+        state = "normal" if self.duplicate_mode_var.get() == "duplicate" else "disabled"
+        self.duplicate_suffix_entry.config(state=state)
+
     def _apply_settings_to_fields(self):
         s = self.settings
         if not s:
@@ -159,7 +186,11 @@ class SFTPDownloaderGUI:
         self.wait_network_var.set(bool(s.get("wait_for_network", self.wait_network_var.get())))
         self.upload_log_var.set(bool(s.get("upload_log", self.upload_log_var.get())))
         self.remote_log_dir_var.set(s.get("log_remote_dir", self.remote_log_dir_var.get()))
+        self.duplicate_mode_var.set(s.get("duplicate_mode", self.duplicate_mode_var.get()))
+        self.duplicate_suffix_var.set(s.get("duplicate_suffix", self.duplicate_suffix_var.get()))
+        self.version_info_var.set(s.get("version_info", self.version_info_var.get()))
         self._toggle_log_dir()
+        self._toggle_duplicate_suffix()
 
     def _update_title(self):
         self.root.title(f"SFTP 自動化下載工具 - {self.settings_path.name}")
@@ -196,6 +227,9 @@ class SFTPDownloaderGUI:
             "wait_for_network": self.wait_network_var.get(),
             "upload_log": self.upload_log_var.get(),
             "log_remote_dir": self.remote_log_dir_var.get().strip(),
+            "duplicate_mode": self.duplicate_mode_var.get(),
+            "duplicate_suffix": self.duplicate_suffix_var.get().strip(),
+            "version_info": self.version_info_var.get().strip(),
         }
         ensure_settings_file(self.settings_path, seed=seed)
         open_in_default_app(self.settings_path)
@@ -241,7 +275,8 @@ class SFTPDownloaderGUI:
         self.log_text.config(state="disabled")
 
         log_dir = self.settings.get("log_dir") or DEFAULT_LOG_DIR
-        logger, log_file = create_logger(log_dir, device_name, log_callback=self._append_log)
+        version_info = self.version_info_var.get().strip()
+        logger, log_file = create_logger(log_dir, device_name, version_info, log_callback=self._append_log)
         self.downloader = SFTPDownloader(
             host=host,
             port=port,
@@ -257,6 +292,8 @@ class SFTPDownloaderGUI:
             retry_delay=self.settings.get("retry_delay", 10),
             upload_log=self.upload_log_var.get(),
             remote_log_dir=self.remote_log_dir_var.get().strip() or None,
+            duplicate_mode=self.duplicate_mode_var.get(),
+            duplicate_suffix=self.duplicate_suffix_var.get().strip() or "copy",
             logger=logger,
             log_file=log_file,
         )

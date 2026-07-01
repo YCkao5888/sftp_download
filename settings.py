@@ -12,6 +12,7 @@ SETTINGS_TEMPLATE = {
     "host": "",
     "port": 22,
     "device_name": "",
+    "version_info": "",
     "username": "",
     "password": "",
     "key_file": "",
@@ -25,6 +26,8 @@ SETTINGS_TEMPLATE = {
     "upload_log": False,
     "log_remote_dir": "",
     "log_dir": "logs",
+    "duplicate_mode": "duplicate",
+    "duplicate_suffix": "copy",
 }
 
 
