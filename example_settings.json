@@ -11,11 +11,12 @@
   "auto_reconnect": true,
   "resume": true,
   "wait_for_network": true,
+  "recursive": true,
   "retry_count": 0,
   "retry_delay": 10,
   "upload_log": false,
   "log_remote_dir": "/data/logs",
   "log_dir": "",
-  "duplicate_mode": "duplicate",
+  "duplicate_mode": "overwrite",
   "duplicate_suffix": "copy"
 }

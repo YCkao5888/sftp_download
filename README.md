@@ -33,7 +33,7 @@
 ```
 python main.py
 ```
-會跳出視窗。若工具資料夾內已有 `settings.json`，畫面欄位會自動帶入其中的值（見下方【設定檔】章節）；否則請自行依序填入：SFTP 主機、Port、SFTP 帳號、SFTP 密碼、來源路徑、本地端儲存路徑，勾選需要的進階選項（斷線自動重連 / 斷點續傳 / 網路偵測自動下載 / 來源檔案更新時的處理方式，詳見下方【來源檔案更新時的版本處理】），並在「Log 設定」區塊填寫**裝置名稱**（必填）與選填的上傳版號資訊，按下「開始下載」即可。畫面下方會即時顯示執行紀錄。
+會跳出視窗。若工具資料夾內已有 `settings.json`，畫面欄位會自動帶入其中的值（見下方【設定檔】章節）；否則請自行依序填入：SFTP 主機、Port、SFTP 帳號、SFTP 密碼、來源路徑、本地端儲存路徑，勾選需要的進階選項（斷線自動重連 / 斷點續傳 / 網路偵測自動下載 / 結構化下載資料夾的單層或多層 / 來源檔案更新時的處理方式，詳見下方【來源檔案更新時的版本處理】），並在「Log 設定」區塊填寫**裝置名稱**（必填）與選填的上傳版號資訊，按下「開始下載」即可。畫面下方會即時顯示執行紀錄。
 
 畫面左上角的「載入設定檔...」按鈕可挑選任一份設定檔（例如同一台裝置用來下載不同資料夾的 `settings_A.json`、`settings_B.json`），選擇後畫面欄位會立刻換成該檔案的內容，視窗標題也會顯示目前使用的是哪一份設定檔；「開始下載」時就會用當下載入的這份設定檔資料。
 
@@ -70,6 +70,7 @@ export SFTP_PASSWORD="your_password"
 | `--no-auto-reconnect` | 停用斷線自動重連（預設啟用） |
 | `--no-resume` | 停用斷點續傳（預設啟用，預設會略過已下載完成的檔案） |
 | `--no-wait-network` | 停用網路偵測自動下載（預設啟用） |
+| `--no-recursive` | 只下載來源路徑當層的檔案，略過所有子資料夾（預設會下載所有子資料夾，即多層） |
 | `--upload-log --log-remote-dir /data/logs` | 下載結束後把 Log 上傳回 SFTP 指定目錄 |
 | `--key-file id_rsa` | 使用 SSH 私鑰登入，取代密碼 |
 | `--retry-count 10` | 重試次數上限；不指定或填 `0` 代表無限次重試（預設無限次） |
@@ -122,17 +123,18 @@ cp example_settings.json settings.json
 | `username` | `--username` | `"myuser"` | SFTP 登入帳號（必填） |
 | `password` | `--password` / 環境變數 `SFTP_PASSWORD` | `"your_password"` | SFTP 登入密碼。若改用 `key_file` 金鑰登入則留空字串 `""`；未提供時 CLI 會互動提示輸入 |
 | `key_file` | `--key-file` | `"C:\\Users\\me\\.ssh\\id_rsa"` 或 `""` | SSH 私鑰檔路徑，填寫後會取代密碼登入；不使用金鑰登入則留空字串 |
-| `remote_path` | `--remote-path` | `"/data/reports"` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄會含子目錄一併遞迴下載）（必填）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
+| `remote_path` | `--remote-path` | `"/data/reports"` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄預設會含子目錄一併遞迴下載，可用 `recursive` 設定改為只下載當層）（必填）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
 | `local_path` | `--local-path` | `"C:\\Users\\me\\Downloads"` | 下載後要存放的本機資料夾路徑（必填），可用本機作業系統慣用的路徑格式 |
 | `auto_reconnect` | `--no-auto-reconnect`（僅能停用） | `true` / `false` | 下載中斷線時是否自動重新連線並接續下載，未填預設 `true` |
 | `resume` | `--no-resume`（僅能停用） | `true` / `false` | 是否啟用斷點續傳（略過已完整下載的檔案、接續未下載完的部分），未填預設 `true` |
 | `wait_for_network` | `--no-wait-network`（僅能停用） | `true` / `false` | 網路不通時是否持續等待，待恢復後自動開始/繼續下載，未填預設 `true` |
+| `recursive` | `--no-recursive`（僅能停用） | `true` / `false` | 來源路徑若為資料夾，是否連同所有子資料夾一併下載（多層）；設為 `false` 則只下載該路徑當層的檔案，略過所有子資料夾（單層），未填預設 `true` |
 | `retry_count` | `--retry-count` | `0` | 連線/下載失敗時的最大重試次數；**`0` 或留空代表無限次重試（預設值，會持續嘗試直到連線恢復）**；設為正整數（如 `10`）則達上限後放棄該檔案 |
 | `retry_delay` | `--retry-delay` | `10` | 每次重試之間的等待秒數，未填預設 `10` |
 | `upload_log` | `--upload-log`（僅能開啟） | `true` / `false` | 下載工作結束（成功或失敗）後，是否把本次的 Log 檔上傳回 SFTP 指定目錄，未填預設 `false` |
 | `log_remote_dir` | `--log-remote-dir` | `"/data/logs"` | `upload_log` 為 `true` 時，Log 要上傳到 SFTP 上的哪個目錄（伺服器端路徑，同 `remote_path` 的路徑格式注意事項） |
 | `log_dir` | `--log-dir` | `""` 或 `"C:\\logs"` | 本機儲存 Log 檔（`.csv`）的資料夾，留空字串則使用預設的 `logs/` 資料夾 |
-| `duplicate_mode` | `--duplicate-mode` | `"duplicate"` 或 `"overwrite"` | 偵測到來源檔案已被更新時的處理方式：`duplicate`（預設，另存新檔、保留舊檔）或 `overwrite`（直接覆蓋舊檔案）；詳見下方【來源檔案更新時的版本處理】 |
+| `duplicate_mode` | `--duplicate-mode` | `"overwrite"` 或 `"duplicate"` | 偵測到來源檔案已被更新時的處理方式：`overwrite`（**預設**，直接覆蓋舊檔案）或 `duplicate`（另存新檔、保留舊檔）；詳見下方【來源檔案更新時的版本處理】 |
 | `duplicate_suffix` | `--duplicate-suffix` | `"copy"` | `duplicate_mode` 為 `duplicate` 時，另存新檔用的檔名後綴，未填預設 `"copy"` |
 
 ---
@@ -145,8 +147,8 @@ cp example_settings.json settings.json
 
 - **兩者都相同** → 判斷為未變更，維持原本的略過/續傳邏輯。
 - **任一項不同（代表來源檔案已被更新過）** → 一定會整份重新下載（不會用新版內容接續舊版檔案，避免新舊內容混雜成一份損毀的檔案），依 `duplicate_mode` 設定決定如何處理：
-  - `duplicate`（預設，GUI 進階選項的「另存新檔」）：保留舊檔不動，把新版本另存成新檔案，檔名規則是「原檔名 + `_` + `duplicate_suffix` 設定值」，第一次是 `原檔名_copy.ext`，同一個檔案再被更新第二次則是 `原檔名_copy1.ext`、第三次 `原檔名_copy2.ext`，以此類推，後綴字串可自訂。適合需要保留歷史版本的情境。
-  - `overwrite`（GUI 進階選項的「直接覆蓋」）：直接用新版本覆蓋舊檔案，不保留歷史版本，本機端不會多出檔案。
+  - `overwrite`（**預設**，GUI 進階選項的「直接覆蓋」）：直接用新版本覆蓋舊檔案，不保留歷史版本，本機端不會多出檔案。
+  - `duplicate`（GUI 進階選項的「另存新檔」）：保留舊檔不動，把新版本另存成新檔案，檔名規則是「原檔名 + `_` + `duplicate_suffix` 設定值」，第一次是 `原檔名_copy.ext`，同一個檔案再被更新第二次則是 `原檔名_copy1.ext`、第三次 `原檔名_copy2.ext`，以此類推，後綴字串可自訂。適合需要保留歷史版本的情境。
 - 若某個檔案是**這台裝置第一次遇到、還沒有版本紀錄**（例如升級到這個版本之前就已經下載過的舊檔案），則沿用單純比對檔案大小的舊行為判斷略過與否，不會平白產生一份重複檔案或誤觸發覆蓋；從這次下載開始才會建立版本紀錄，之後若再更新才會依 `duplicate_mode` 處理。
 
 > 若不希望保留這份版本紀錄檔或想重新讓所有檔案回到「首次遇到」的狀態（例如手動清空過本地端資料夾），直接刪除 `.sftp_download_manifest.json` 即可，下次執行會依單純檔案大小比對重新建立。

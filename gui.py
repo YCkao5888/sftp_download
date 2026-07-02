@@ -19,6 +19,8 @@ class SFTPDownloaderGUI:
         self.settings = load_settings(self.settings_path)
         self._build_widgets()
         self._apply_settings_to_fields()
+        self._toggle_log_dir()
+        self._toggle_duplicate_suffix()
         self._update_title()
 
     def _build_widgets(self):
@@ -106,25 +108,34 @@ class SFTPDownloaderGUI:
             row=0, column=2, sticky="w", **pad
         )
 
-        ttk.Label(adv_frame, text="來源檔案更新時：").grid(row=1, column=0, sticky="w", **pad)
-        self.duplicate_mode_var = tk.StringVar(value="duplicate")
+        ttk.Label(adv_frame, text="結構化下載資料夾：").grid(row=1, column=0, sticky="w", **pad)
+        self.recursive_var = tk.BooleanVar(value=True)
+        ttk.Radiobutton(
+            adv_frame, text="多層（含所有子資料夾）", value=True, variable=self.recursive_var,
+        ).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Radiobutton(
+            adv_frame, text="單層（僅此層檔案）", value=False, variable=self.recursive_var,
+        ).grid(row=1, column=2, sticky="w", **pad)
+
+        ttk.Label(adv_frame, text="來源檔案更新時：").grid(row=2, column=0, sticky="w", **pad)
+        self.duplicate_mode_var = tk.StringVar(value="overwrite")
         ttk.Radiobutton(
             adv_frame, text="另存新檔", value="duplicate", variable=self.duplicate_mode_var,
             command=self._toggle_duplicate_suffix,
-        ).grid(row=1, column=1, sticky="w", **pad)
+        ).grid(row=2, column=1, sticky="w", **pad)
         ttk.Radiobutton(
             adv_frame, text="直接覆蓋", value="overwrite", variable=self.duplicate_mode_var,
             command=self._toggle_duplicate_suffix,
-        ).grid(row=1, column=2, sticky="w", **pad)
+        ).grid(row=2, column=2, sticky="w", **pad)
 
-        ttk.Label(adv_frame, text="另存新檔後綴：").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Label(adv_frame, text="另存新檔後綴：").grid(row=3, column=0, sticky="w", **pad)
         self.duplicate_suffix_var = tk.StringVar(value="copy")
         self.duplicate_suffix_entry = ttk.Entry(adv_frame, textvariable=self.duplicate_suffix_var, width=12)
-        self.duplicate_suffix_entry.grid(row=2, column=1, sticky="w", **pad)
+        self.duplicate_suffix_entry.grid(row=3, column=1, sticky="w", **pad)
         ttk.Label(
             adv_frame, text="例：copy → 更新時存為 name_copy.ext，再更新則 name_copy1.ext、copy2...",
             foreground="#777777",
-        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=6)
+        ).grid(row=3, column=2, columnspan=2, sticky="w", padx=6)
 
         # --- Log 設定 ---
         log_frame = ttk.LabelFrame(outer, text="Log 設定", padding=8)
@@ -184,6 +195,7 @@ class SFTPDownloaderGUI:
         self.auto_reconnect_var.set(bool(s.get("auto_reconnect", self.auto_reconnect_var.get())))
         self.resume_var.set(bool(s.get("resume", self.resume_var.get())))
         self.wait_network_var.set(bool(s.get("wait_for_network", self.wait_network_var.get())))
+        self.recursive_var.set(bool(s.get("recursive", self.recursive_var.get())))
         self.upload_log_var.set(bool(s.get("upload_log", self.upload_log_var.get())))
         self.remote_log_dir_var.set(s.get("log_remote_dir", self.remote_log_dir_var.get()))
         self.duplicate_mode_var.set(s.get("duplicate_mode", self.duplicate_mode_var.get()))
@@ -206,6 +218,8 @@ class SFTPDownloaderGUI:
         self.settings_path = Path(chosen)
         self.settings = load_settings(self.settings_path)
         self._apply_settings_to_fields()
+        self._toggle_log_dir()
+        self._toggle_duplicate_suffix()
         self._update_title()
         self.status_var.set(f"已載入設定檔：{self.settings_path.name}")
 
@@ -225,6 +239,7 @@ class SFTPDownloaderGUI:
             "auto_reconnect": self.auto_reconnect_var.get(),
             "resume": self.resume_var.get(),
             "wait_for_network": self.wait_network_var.get(),
+            "recursive": self.recursive_var.get(),
             "upload_log": self.upload_log_var.get(),
             "log_remote_dir": self.remote_log_dir_var.get().strip(),
             "duplicate_mode": self.duplicate_mode_var.get(),
@@ -288,6 +303,7 @@ class SFTPDownloaderGUI:
             auto_reconnect=self.auto_reconnect_var.get(),
             resume=self.resume_var.get(),
             wait_for_network=self.wait_network_var.get(),
+            recursive=self.recursive_var.get(),
             retry_count=self.settings.get("retry_count"),
             retry_delay=self.settings.get("retry_delay", 10),
             upload_log=self.upload_log_var.get(),

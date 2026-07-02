@@ -21,12 +21,13 @@ SETTINGS_TEMPLATE = {
     "auto_reconnect": True,
     "resume": True,
     "wait_for_network": True,
+    "recursive": True,
     "retry_count": 0,
     "retry_delay": 10,
     "upload_log": False,
     "log_remote_dir": "",
     "log_dir": "logs",
-    "duplicate_mode": "duplicate",
+    "duplicate_mode": "overwrite",
     "duplicate_suffix": "copy",
 }
 

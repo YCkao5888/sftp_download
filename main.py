@@ -49,6 +49,11 @@ def build_parser():
     parser.add_argument("--no-auto-reconnect", action="store_true", help="停用斷線自動重連")
     parser.add_argument("--no-resume", action="store_true", help="停用斷點續傳")
     parser.add_argument("--no-wait-network", action="store_true", help="停用網路偵測自動下載")
+    parser.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="停用多層下載，只下載來源路徑當層的檔案，略過所有子資料夾（預設會下載所有子資料夾）",
+    )
     parser.add_argument("--retry-count", type=int, help="重試次數上限，0 或不指定代表無限次重試（預設無限次）")
     parser.add_argument("--retry-delay", type=int, help="重試間隔秒數（預設 10）")
 
@@ -58,7 +63,7 @@ def build_parser():
     parser.add_argument(
         "--duplicate-mode",
         choices=["duplicate", "overwrite"],
-        help="來源檔案偵測到已更新版本時的處理方式：duplicate=另存新檔（預設）、overwrite=直接覆蓋舊檔案",
+        help="來源檔案偵測到已更新版本時的處理方式：overwrite=直接覆蓋舊檔案（預設）、duplicate=另存新檔",
     )
     parser.add_argument(
         "--duplicate-suffix",
@@ -89,13 +94,14 @@ def run_cli(args):
     log_remote_dir = _resolve(args.log_remote_dir, settings, "log_remote_dir")
     # log_dir 留空字串代表「未設定」，不像 retry_count=0 是有意義的值，因此用 or 串接才能正確回退到預設值。
     log_dir = args.log_dir or settings.get("log_dir") or str(DEFAULT_LOG_DIR)
-    duplicate_mode = args.duplicate_mode or settings.get("duplicate_mode") or "duplicate"
+    duplicate_mode = args.duplicate_mode or settings.get("duplicate_mode") or "overwrite"
     duplicate_suffix = args.duplicate_suffix or settings.get("duplicate_suffix") or "copy"
 
     # 布林旗標：settings.json 提供基準值，CLI 的 --no-* / --upload-log 只能單向覆蓋（關閉/開啟）。
     auto_reconnect = False if args.no_auto_reconnect else bool(settings.get("auto_reconnect", True))
     resume = False if args.no_resume else bool(settings.get("resume", True))
     wait_for_network = False if args.no_wait_network else bool(settings.get("wait_for_network", True))
+    recursive = False if args.no_recursive else bool(settings.get("recursive", True))
     upload_log = True if args.upload_log else bool(settings.get("upload_log", False))
 
     missing = [
@@ -132,6 +138,7 @@ def run_cli(args):
         auto_reconnect=auto_reconnect,
         resume=resume,
         wait_for_network=wait_for_network,
+        recursive=recursive,
         retry_count=retry_count,
         retry_delay=retry_delay,
         upload_log=upload_log,

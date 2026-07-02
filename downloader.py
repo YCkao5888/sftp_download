@@ -110,11 +110,12 @@ class SFTPDownloader:
         auto_reconnect=True,
         resume=True,
         wait_for_network=True,
+        recursive=True,
         retry_count=None,
         retry_delay=10,
         upload_log=False,
         remote_log_dir=None,
-        duplicate_mode="duplicate",
+        duplicate_mode="overwrite",
         duplicate_suffix="copy",
         logger=None,
         log_file=None,
@@ -129,11 +130,12 @@ class SFTPDownloader:
         self.auto_reconnect = auto_reconnect
         self.resume = resume
         self.wait_for_network = wait_for_network
+        self.recursive = recursive  # True：下載所有子資料夾（多層）；False：只下載該路徑下的檔案（單層）
         self.retry_count = retry_count  # None 或 <= 0 代表無限次重試
         self.retry_delay = retry_delay
         self.upload_log = upload_log
         self.remote_log_dir = remote_log_dir
-        self.duplicate_mode = duplicate_mode or "duplicate"  # "duplicate"（另存新檔）或 "overwrite"（直接覆蓋）
+        self.duplicate_mode = duplicate_mode or "overwrite"  # "duplicate"（另存新檔）或 "overwrite"（直接覆蓋，預設）
         self.duplicate_suffix = duplicate_suffix or "copy"
         self.logger = logger
         self.log_file = log_file
@@ -211,10 +213,20 @@ class SFTPDownloader:
     def _list_remote_files(self, remote_root):
         files = []
         root_stat = self.sftp.stat(remote_root)
-        if stat.S_ISDIR(root_stat.st_mode):
+        if not stat.S_ISDIR(root_stat.st_mode):
+            files.append((remote_root, os.path.basename(remote_root.rstrip("/"))))
+        elif self.recursive:
             self._walk_remote_dir(remote_root, "", files)
         else:
-            files.append((remote_root, os.path.basename(remote_root.rstrip("/"))))
+            skipped_dirs = []
+            for entry in self.sftp.listdir_attr(remote_root):
+                if stat.S_ISDIR(entry.st_mode):
+                    skipped_dirs.append(entry.filename)
+                else:
+                    remote_path = remote_root.rstrip("/") + "/" + entry.filename
+                    files.append((remote_path, entry.filename))
+            if skipped_dirs:
+                self.logger.info(f"僅下載單層（未啟用多層），略過 {len(skipped_dirs)} 個子資料夾: {', '.join(skipped_dirs)}")
         return files
 
     def _walk_remote_dir(self, remote_dir, rel_dir, files):
