@@ -354,12 +354,10 @@ class SFTPDownloader:
                         local_size = disk_size
                         mode = "ab"
                     else:
+                        # 走到這裡 duplicate_mode 必定是 "overwrite"："duplicate" 模式在上面
+                        # 的 elif 分支就已經攔截、一律整份重新下載成新檔案，不會執行到這裡。
                         reason = "本地檔案內容與紀錄不符（可能已被人為修改）" if same_remote_version else "偵測到來源檔案已更新"
-                        if self.duplicate_mode == "overwrite":
-                            self.logger.info(f"{reason}，覆蓋舊檔案: {rel_path}")
-                        else:
-                            target_file = self._next_duplicate_path(local_file)
-                            self.logger.info(f"{reason}，另存為: {target_file.name}")
+                        self.logger.info(f"{reason}，覆蓋舊檔案: {rel_path}")
 
         self.logger.info(f"開始下載: {rel_path} ({format_size(remote_size)})")
         last_pct_logged = -1

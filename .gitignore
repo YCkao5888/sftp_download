@@ -10,3 +10,16 @@ logs/
 settings.json
 settings_*.json
 !example_settings.json
+
+
+# pytest 產生的暫存檔
+.pytest_cache/
+
+# 測試覆蓋率報告與相關檔案
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# 測試產生的日誌 (視你的設定而定)
+*.log

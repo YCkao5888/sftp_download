@@ -8,6 +8,7 @@
 - `gui.py`：圖形化介面。
 - `settings.py`：設定檔（`settings.json`）讀取/開啟工具，CLI 與 GUI 共用。
 - `example_settings.json`：設定檔範本，複製改名為 `settings.json` 後填入實際值即可使用。
+- `tests/`：pytest 單元測試（`downloader.py`／`settings.py`／`main.py`），詳見下方【開發：執行單元測試】。
 
 ---
 
@@ -198,4 +199,29 @@ cp example_settings.json settings.json
 | `遠端路徑不存在` | `--remote-path` 路徑打錯或已被移除 | 用 SFTP 客戶端（如 FileZilla）確認路徑是否存在、大小寫是否相符 |
 | `無法連線至 host:port，N 秒後重試...`（一直重複） | 網路中斷或斷網環境 | 若已啟用「網路偵測自動下載」，程式會自動持續等待，網路恢復後會自動繼續下載；也可先確認本機網路是否正常 |
 
+---
+
+## 【開發：執行單元測試】
+
+本工具附有 `tests/` 資料夾內的 pytest 單元測試（涵蓋 `downloader.py`、`settings.py`、`main.py`），所有網路/檔案 I/O 都經過 Mock，不會真的連線到 SFTP 伺服器，可安心在任何環境執行。這份章節只有要修改程式碼或想確認改動沒有破壞既有行為時才需要，一般下載工具的日常使用不需要理會。
+
+1. 安裝測試相依套件（僅需一次）：
+   ```
+   pip install -r requirements-dev.txt
+   ```
+2. 執行全部測試：
+   ```
+   python -m pytest
+   ```
+3. 執行測試並在終端機顯示覆蓋率報告（含未覆蓋的行號）：
+   ```
+   python -m pytest --cov=downloader --cov=settings --cov=main --cov-report=term-missing
+   ```
+4. 若想要更方便瀏覽的 HTML 覆蓋率報告：
+   ```
+   python -m pytest --cov=downloader --cov=settings --cov=main --cov-report=html
+   ```
+   產生的報告在 `htmlcov/index.html`，用瀏覽器開啟即可依檔案、行數檢視覆蓋狀況。
+
+只想跑單一檔案或單一測試時，可以用 `python -m pytest tests/test_downloader.py`，或加上 `-k 關鍵字` 只跑名稱符合的測試（例如 `python -m pytest -k duplicate_mode`）。
 
