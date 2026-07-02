@@ -25,13 +25,59 @@ class SFTPDownloaderGUI:
 
     def _build_widgets(self):
         pad = {"padx": 6, "pady": 4}
-        self.root.minsize(600, 560)
+        self.root.minsize(420, 360)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        outer = ttk.Frame(self.root, padding=10)
-        outer.grid(row=0, column=0, sticky="nsew")
+        # 用 Canvas + Scrollbar 包住整份表單：畫面內容在小螢幕/低解析度下放不下時可以捲動查看，
+        # 而不會被視窗邊界裁掉、變成無法觸及的欄位。
+        canvas = tk.Canvas(self.root, highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        outer = ttk.Frame(canvas, padding=10)
+        outer_window = canvas.create_window((0, 0), window=outer, anchor="nw")
         outer.columnconfigure(0, weight=1)
+
+        def _sync_scrollregion(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_inner_width(event):
+            canvas.itemconfig(outer_window, width=event.width)
+
+        outer.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", _sync_inner_width)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _on_mousewheel_linux(event):
+            canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+
+        def _bind_mousewheel(event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_mousewheel_linux)
+            canvas.bind_all("<Button-5>", _on_mousewheel_linux)
+
+        def _unbind_mousewheel(event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+
+        # 依螢幕解析度決定初始視窗大小（不超過螢幕的 90%/85%），並置中顯示；
+        # 視窗仍可自由縮放，內容放不下時改用上面的捲軸捲動查看。
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        width = max(420, min(700, int(screen_w * 0.9)))
+        height = max(360, min(750, int(screen_h * 0.85)))
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 3)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
 
         settings_bar = ttk.Frame(outer)
         settings_bar.grid(row=0, column=0, sticky="we", pady=(0, 8))
@@ -169,9 +215,8 @@ class SFTPDownloaderGUI:
             row=8, column=0, sticky="w", pady=(0, 4)
         )
 
-        self.log_text = scrolledtext.ScrolledText(outer, width=80, height=16, state="disabled")
+        self.log_text = scrolledtext.ScrolledText(outer, width=80, height=12, state="disabled")
         self.log_text.grid(row=9, column=0, sticky="nsew")
-        outer.rowconfigure(9, weight=1)
 
     def _toggle_log_dir(self):
         state = "normal" if self.upload_log_var.get() else "disabled"
