@@ -210,13 +210,13 @@ class SFTPDownloader:
         except Exception:
             pass
 
-    def _list_remote_files(self, remote_root):
+    def _list_remote_files(self, remote_root, local_root):
         files = []
         root_stat = self.sftp.stat(remote_root)
         if not stat.S_ISDIR(root_stat.st_mode):
             files.append((remote_root, os.path.basename(remote_root.rstrip("/"))))
         elif self.recursive:
-            self._walk_remote_dir(remote_root, "", files)
+            self._walk_remote_dir(remote_root, "", files, local_root)
         else:
             skipped_dirs = []
             for entry in self.sftp.listdir_attr(remote_root):
@@ -229,12 +229,16 @@ class SFTPDownloader:
                 self.logger.info(f"僅下載單層（未啟用多層），略過 {len(skipped_dirs)} 個子資料夾: {', '.join(skipped_dirs)}")
         return files
 
-    def _walk_remote_dir(self, remote_dir, rel_dir, files):
+    def _walk_remote_dir(self, remote_dir, rel_dir, files, local_root):
+        # 即使子資料夾底下沒有任何檔案，也要在本地端建立對應的空資料夾，
+        # 否則單純比對「有沒有檔案」永遠不會觸發 mkdir，空資料夾就不會被下載下來。
+        local_dir = local_root / Path(*rel_dir.split("/")) if rel_dir else local_root
+        local_dir.mkdir(parents=True, exist_ok=True)
         for entry in self.sftp.listdir_attr(remote_dir):
             remote_path = remote_dir.rstrip("/") + "/" + entry.filename
             rel_path = f"{rel_dir}/{entry.filename}" if rel_dir else entry.filename
             if stat.S_ISDIR(entry.st_mode):
-                self._walk_remote_dir(remote_path, rel_path, files)
+                self._walk_remote_dir(remote_path, rel_path, files, local_root)
             else:
                 files.append((remote_path, rel_path))
 
@@ -355,7 +359,7 @@ class SFTPDownloader:
             list_attempts = 0
             while file_list is None:
                 try:
-                    file_list = self._list_remote_files(self.remote_path)
+                    file_list = self._list_remote_files(self.remote_path, local_root)
                 except FileNotFoundError:
                     self.logger.error(f"遠端路徑不存在: {self.remote_path}")
                     return False

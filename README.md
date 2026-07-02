@@ -130,7 +130,7 @@ cp example_settings.json settings.json
 | `auto_reconnect` | `--no-auto-reconnect`（僅能停用） | `true` / `false` | 下載中斷線時是否自動重新連線並接續下載，未填預設 `true` |
 | `resume` | `--no-resume`（僅能停用） | `true` / `false` | 是否啟用斷點續傳（略過已完整下載的檔案、接續未下載完的部分），未填預設 `true` |
 | `wait_for_network` | `--no-wait-network`（僅能停用） | `true` / `false` | 網路不通時是否持續等待，待恢復後自動開始/繼續下載，未填預設 `true` |
-| `recursive` | `--no-recursive`（僅能停用） | `true` / `false` | 來源路徑若為資料夾，是否連同所有子資料夾一併下載（多層）；設為 `false` 則只下載該路徑當層的檔案，略過所有子資料夾（單層），未填預設 `true` |
+| `recursive` | `--no-recursive`（僅能停用） | `true` / `false` | 來源路徑若為資料夾，是否連同所有子資料夾一併下載（多層）；設為 `false` 則只下載該路徑當層的檔案，略過所有子資料夾（單層），未填預設 `true`。啟用多層時，即使某個子資料夾內沒有任何檔案（空資料夾），本地端也會建立對應的空資料夾，完整保留原始的資料夾結構 |
 | `retry_count` | `--retry-count` | `0` | 連線/下載失敗時的最大重試次數；**`0` 或留空代表無限次重試（預設值，會持續嘗試直到連線恢復）**；設為正整數（如 `10`）則達上限後放棄該檔案 |
 | `retry_delay` | `--retry-delay` | `10` | 每次重試之間的等待秒數，未填預設 `10` |
 | `upload_log` | `--upload-log`（僅能開啟） | `true` / `false` | 下載工作結束（成功或失敗）後，是否把本次的 Log 檔上傳回 SFTP 指定目錄，未填預設 `false` |
