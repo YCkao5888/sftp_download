@@ -1,0 +1,20 @@
+# 下載忽略設定檔範本：複製改名為 download_ignore.txt，並在 settings.json 的
+# ignore_file 欄位（或 CLI 的 --ignore-file 參數）填入這個檔案的路徑即可。
+# 格式完全仿照 .gitignore：井字號開頭是註解、空白行會被跳過，
+# 規則比對的對象是「相對於 SFTP 來源路徑（remote_path）」的路徑。
+# 以下皆為範例，請依實際需求增刪。
+
+# 忽略所有 .tmp 檔案（任何層級）
+*.tmp
+
+# 例外：keep.tmp 即使符合上面的 *.tmp 也仍然要下載
+!keep.tmp
+
+# 忽略所有名為 logs 的資料夾（含其下所有內容，整棵略過）
+logs/
+
+# 只忽略來源路徑根目錄下的 debug.txt（開頭的 / 代表定錨在根目錄）
+/debug.txt
+
+# 忽略 data 底下任何層級的 .bak 檔案
+data/**/*.bak

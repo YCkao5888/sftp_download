@@ -22,6 +22,7 @@ SETTINGS_TEMPLATE = {
     "resume": True,
     "wait_for_network": True,
     "recursive": True,
+    "ignore_file": "",
     "retry_count": 0,
     "retry_delay": 10,
     "upload_log": False,

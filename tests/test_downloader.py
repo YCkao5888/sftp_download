@@ -269,6 +269,112 @@ class TestListRemoteFiles:
 
 
 # ---------------------------------------------------------------------------
+# 下載忽略設定檔（_load_ignore_spec / _is_ignored / 列表過濾）
+# ---------------------------------------------------------------------------
+
+class TestIgnoreSpec:
+    def _make_with_ignore(self, downloader_factory, tmp_path, rules, **overrides):
+        ignore_path = tmp_path / "download_ignore.txt"
+        ignore_path.write_text(rules, encoding="utf-8")
+        d = downloader_factory(ignore_file=str(ignore_path), **overrides)
+        d._ignore_spec = d._load_ignore_spec()
+        return d
+
+    def test_no_ignore_file_configured_returns_none(self, downloader_factory):
+        d = downloader_factory()
+        assert d._load_ignore_spec() is None
+
+    def test_missing_ignore_file_means_no_ignore_and_logs_info(self, downloader_factory, tmp_path, caplog):
+        d = downloader_factory(ignore_file=str(tmp_path / "not_exist.txt"))
+        with caplog.at_level(logging.INFO):
+            assert d._load_ignore_spec() is None
+        assert any("忽略設定檔不存在" in r.message for r in caplog.records)
+
+    def test_invalid_line_is_skipped_with_warning_but_other_rules_still_apply(self, downloader_factory, tmp_path, caplog):
+        # "!" 單獨一行是不合法的 gitignore 規則，應跳過並警告；"*.tmp" 仍要生效。
+        with caplog.at_level(logging.WARNING):
+            d = self._make_with_ignore(downloader_factory, tmp_path, "!\n*.tmp\n")
+        assert any("格式錯誤" in r.message for r in caplog.records)
+        assert d._is_ignored("a.tmp")
+        assert not d._is_ignored("a.txt")
+
+    def test_utf8_bom_and_crlf_do_not_break_first_rule(self, downloader_factory, tmp_path):
+        """Windows 記事本以 UTF-8 存檔常帶 BOM 且用 CRLF 換行；BOM 若沒去除會黏在
+        第一行規則前面，導致第一條規則永遠比對不到（實際回報過的問題）。"""
+        ignore_path = tmp_path / "download_ignore.txt"
+        ignore_path.write_bytes("a.txt\r\nb.txt\r\n".encode("utf-8-sig"))
+        d = downloader_factory(ignore_file=str(ignore_path))
+        d._ignore_spec = d._load_ignore_spec()
+        assert d._is_ignored("a.txt")  # 第一行規則（緊接在 BOM 後）也要生效
+        assert d._is_ignored("b.txt")
+        assert not d._is_ignored("c.txt")
+
+    def test_comments_and_blank_lines_do_not_warn(self, downloader_factory, tmp_path, caplog):
+        with caplog.at_level(logging.WARNING):
+            self._make_with_ignore(downloader_factory, tmp_path, "# 註解\n\n*.tmp\n")
+        assert not any("格式錯誤" in r.message for r in caplog.records)
+
+    def test_negation_rule_re_includes_file(self, downloader_factory, tmp_path):
+        d = self._make_with_ignore(downloader_factory, tmp_path, "*.tmp\n!keep.tmp\n")
+        assert d._is_ignored("a.tmp")
+        assert not d._is_ignored("keep.tmp")
+
+    def test_recursive_listing_filters_ignored_files(self, downloader_factory, fake_sftp_factory, tmp_path):
+        d = self._make_with_ignore(downloader_factory, tmp_path, "*.tmp\n", recursive=True)
+        d.sftp = fake_sftp_factory(files={
+            "/remote/a.txt": b"a",
+            "/remote/b.tmp": b"b",
+            "/remote/sub/c.tmp": b"c",
+            "/remote/sub/d.txt": b"d",
+        })
+        files = d._list_remote_files("/remote", tmp_path)
+        assert sorted(rel for _, rel in files) == ["a.txt", "sub/d.txt"]
+
+    def test_recursive_listing_prunes_ignored_directory_entirely(self, downloader_factory, fake_sftp_factory, tmp_path, caplog):
+        d = self._make_with_ignore(downloader_factory, tmp_path, "logs/\n", recursive=True)
+        d.sftp = fake_sftp_factory(files={
+            "/remote/a.txt": b"a",
+            "/remote/logs/x.log": b"x",
+            "/remote/logs/deep/y.log": b"y",
+        })
+        with caplog.at_level(logging.INFO):
+            files = d._list_remote_files("/remote", tmp_path)
+        assert [rel for _, rel in files] == ["a.txt"]
+        # 整棵資料夾剪枝：本地端不建立被忽略的資料夾
+        assert not (tmp_path / "logs").exists()
+        assert any("略過資料夾" in r.message for r in caplog.records)
+
+    def test_single_level_listing_filters_ignored_files(self, downloader_factory, fake_sftp_factory, tmp_path):
+        d = self._make_with_ignore(downloader_factory, tmp_path, "*.tmp\n", recursive=False)
+        d.sftp = fake_sftp_factory(files={"/remote/a.txt": b"a", "/remote/b.tmp": b"b"})
+        files = d._list_remote_files("/remote", tmp_path)
+        assert [rel for _, rel in files] == ["a.txt"]
+
+    def test_single_remote_file_matching_rule_is_ignored(self, downloader_factory, fake_sftp_factory, tmp_path):
+        d = self._make_with_ignore(downloader_factory, tmp_path, "report.csv\n")
+        d.sftp = fake_sftp_factory(files={"/remote/report.csv": b"data"})
+        assert d._list_remote_files("/remote/report.csv", tmp_path) == []
+
+    def test_no_spec_loaded_nothing_is_ignored(self, downloader_factory):
+        d = downloader_factory()
+        assert not d._is_ignored("anything.txt")
+
+    def test_run_loads_ignore_spec_and_skips_ignored_files(self, downloader_factory, fake_sftp_factory, tmp_path):
+        ignore_path = tmp_path / "download_ignore.txt"
+        ignore_path.write_text("*.tmp\n", encoding="utf-8")
+        d = downloader_factory(wait_for_network=False, ignore_file=str(ignore_path))
+        d._connect_with_retry = MagicMock(side_effect=lambda: setattr(
+            d, "sftp",
+            fake_sftp_factory(files={"/remote/a.txt": b"A", "/remote/b.tmp": b"B"},
+                              mtimes={"/remote/a.txt": 1, "/remote/b.tmp": 2}),
+        ))
+        d._close = MagicMock()
+        assert d.run() is True
+        assert (Path(d.local_path) / "a.txt").exists()
+        assert not (Path(d.local_path) / "b.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
 # manifest load / save
 # ---------------------------------------------------------------------------
 

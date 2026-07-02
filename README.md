@@ -5,10 +5,12 @@
 檔案結構：
 - `main.py`：進入點。不帶參數 → 開啟 GUI；帶參數 → CLI 模式。
 - `downloader.py`：下載核心邏輯（連線、斷線重連、斷點續傳、Log）。
+- `gitignore.py`：「下載忽略設定檔」的 gitignore 規則比對（純 Python 標準庫實作，不需安裝額外套件）。
 - `gui.py`：圖形化介面。
 - `settings.py`：設定檔（`settings.json`）讀取/開啟工具，CLI 與 GUI 共用。
 - `example_settings.json`：設定檔範本，複製改名為 `settings.json` 後填入實際值即可使用。
-- `tests/`：pytest 單元測試（`downloader.py`／`settings.py`／`main.py`），詳見下方【開發：執行單元測試】。
+- `example_download_ignore.txt`：「下載忽略設定檔」範本，複製改名為 `download_ignore.txt` 後依需求增刪規則即可使用。
+- `tests/`：pytest 單元測試（`downloader.py`／`gitignore.py`／`settings.py`／`main.py`），詳見下方【開發：執行單元測試】。
 
 ---
 
@@ -78,6 +80,7 @@ export SFTP_PASSWORD="your_password"
 | `--key-file id_rsa` | 使用 SSH 私鑰登入，取代密碼 |
 | `--retry-count 10` | 重試次數上限；不指定或填 `0` 代表無限次重試（預設無限次） |
 | `--config settings_A.json` | 指定要讀取的設定檔路徑（預設讀取工具資料夾內的 `settings.json`） |
+| `--ignore-file download_ignore.txt` | 指定「下載忽略設定檔」路徑，符合其中規則的檔案/資料夾不會被下載（格式同 `.gitignore`，詳見下方【下載忽略設定檔】） |
 
 完整參數說明可執行 `python main.py --help` 查看。
 
@@ -132,6 +135,7 @@ cp example_settings.json settings.json
 | `resume` | `--no-resume`（僅能停用） | `true` / `false` | 是否啟用斷點續傳（略過已完整下載的檔案、接續未下載完的部分），未填預設 `true` |
 | `wait_for_network` | `--no-wait-network`（僅能停用） | `true` / `false` | 網路不通時是否持續等待，待恢復後自動開始/繼續下載，未填預設 `true` |
 | `recursive` | `--no-recursive`（僅能停用） | `true` / `false` | 來源路徑若為資料夾，是否連同所有子資料夾一併下載（多層）；設為 `false` 則只下載該路徑當層的檔案，略過所有子資料夾（單層），未填預設 `true`。啟用多層時，即使某個子資料夾內沒有任何檔案（空資料夾），本地端也會建立對應的空資料夾，完整保留原始的資料夾結構 |
+| `ignore_file` | `--ignore-file` | `"download_ignore.txt"` 或 `""` | 「下載忽略設定檔」的路徑，符合其中規則的檔案/資料夾不會被下載；留空字串代表不忽略任何檔案，詳見下方【下載忽略設定檔】 |
 | `retry_count` | `--retry-count` | `0` | 連線/下載失敗時的最大重試次數；**`0` 或留空代表無限次重試（預設值，會持續嘗試直到連線恢復）**；設為正整數（如 `10`）則達上限後放棄該檔案 |
 | `retry_delay` | `--retry-delay` | `10` | 每次重試之間的等待秒數，未填預設 `10` |
 | `upload_log` | `--upload-log`（僅能開啟） | `true` / `false` | 下載工作結束（成功或失敗）後，是否把本次的 Log 檔上傳回 SFTP 指定目錄，未填預設 `false` |
@@ -139,6 +143,32 @@ cp example_settings.json settings.json
 | `log_dir` | `--log-dir` | `""` 或 `"C:\\logs"` | 本機儲存 Log 檔（`.csv`）的資料夾，留空字串則使用預設的 `logs/` 資料夾 |
 | `duplicate_mode` | `--duplicate-mode` | `"overwrite"` 或 `"duplicate"` | 偵測到來源檔案已被更新時的處理方式：`overwrite`（**預設**，直接覆蓋舊檔案）或 `duplicate`（另存新檔、保留舊檔）；詳見下方【來源檔案更新時的版本處理】 |
 | `duplicate_suffix` | `--duplicate-suffix` | `"copy"` | `duplicate_mode` 為 `duplicate` 時，另存新檔用的檔名後綴，未填預設 `"copy"` |
+
+---
+
+## 【下載忽略設定檔（ignore_file）】
+
+若 SFTP 來源資料夾中有部分檔案不需要下載（例如暫存檔、特定副檔名、整個子資料夾），可以準備一份「下載忽略設定檔」，透過 `settings.json` 的 `ignore_file` 欄位或 CLI 的 `--ignore-file` 參數指定其路徑，下載時就會自動略過符合規則的檔案，Log 會逐筆記錄「依忽略設定檔略過: ...」。工具資料夾內附有 `example_download_ignore.txt` 作為範本，複製改名為 `download_ignore.txt` 再依需求增刪規則即可（檔案請以 **UTF-8** 編碼儲存；帶 BOM 或 Windows 記事本的預設存檔方式皆可正常讀取）。
+
+- **格式完全仿照 `.gitignore` 的規則**（比對的對象是「相對於 SFTP 來源路徑」的路徑），常用寫法：
+  ```gitignore
+  # 井字號開頭的行是註解，空白行會被跳過（註解只能自成一行，不能寫在規則後面）
+
+  # 忽略所有 .tmp 檔案（任何層級）
+  *.tmp
+  # 例外：keep.tmp 即使符合上面的 *.tmp 也仍然要下載
+  !keep.tmp
+  # 忽略所有名為 logs 的資料夾（含其下所有內容，整棵略過）
+  logs/
+  # 只忽略來源路徑根目錄下的 debug.txt（開頭的 / 代表定錨在根目錄）
+  /debug.txt
+  # 忽略 data 底下任何層級的 .bak 檔案
+  data/**/*.bak
+  ```
+- **找不到指定的忽略設定檔**：代表無需忽略，照常下載全部檔案（Log 會提示一筆訊息，不視為錯誤）。
+- **某一行規則格式錯誤**：只略過該行並在 Log 記錄一筆**警告**（訊息含行號與原始內容），其餘正確的規則仍照常生效。
+- 被忽略的資料夾會整棵略過（不往下走訪，本地端也不會建立對應資料夾），與 git 的行為一致。
+- 規則比對由工具內附的 `gitignore.py` 模組實作，**只用 Python 標準庫、不需安裝任何額外套件**，離線環境也可直接使用。
 
 ---
 
@@ -215,11 +245,11 @@ cp example_settings.json settings.json
    ```
 3. 執行測試並在終端機顯示覆蓋率報告（含未覆蓋的行號）：
    ```
-   python -m pytest --cov=downloader --cov=settings --cov=main --cov-report=term-missing
+   python -m pytest --cov=downloader --cov=gitignore --cov=settings --cov=main --cov-report=term-missing
    ```
 4. 若想要更方便瀏覽的 HTML 覆蓋率報告：
    ```
-   python -m pytest --cov=downloader --cov=settings --cov=main --cov-report=html
+   python -m pytest --cov=downloader --cov=gitignore --cov=settings --cov=main --cov-report=html
    ```
    產生的報告在 `htmlcov/index.html`，用瀏覽器開啟即可依檔案、行數檢視覆蓋狀況。
 

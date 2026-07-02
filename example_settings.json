@@ -12,11 +12,12 @@
   "resume": true,
   "wait_for_network": true,
   "recursive": true,
+  "ignore_file": "download_ignore.txt",
   "retry_count": 0,
   "retry_delay": 10,
   "upload_log": false,
   "log_remote_dir": "/data/logs",
-  "log_dir": "",
+  "log_dir": "logs/",
   "duplicate_mode": "overwrite",
   "duplicate_suffix": "copy"
 }

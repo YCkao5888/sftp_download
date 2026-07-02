@@ -45,6 +45,11 @@ def build_parser():
     parser.add_argument("--key-file", help="SSH 私鑰檔路徑（若使用金鑰登入，取代 --password）")
     parser.add_argument("--remote-path", help="SFTP 來源路徑（檔案或目錄）")
     parser.add_argument("--local-path", help="本地端儲存路徑")
+    parser.add_argument(
+        "--ignore-file",
+        help="下載忽略設定檔路徑，內容格式完全同 .gitignore，符合規則的檔案/資料夾不會被下載；"
+        "找不到該檔案則代表無需忽略任何檔案",
+    )
 
     parser.add_argument("--no-auto-reconnect", action="store_true", help="停用斷線自動重連")
     parser.add_argument("--no-resume", action="store_true", help="停用斷點續傳")
@@ -89,6 +94,7 @@ def run_cli(args):
     key_file = _resolve(args.key_file, settings, "key_file")
     remote_path = _resolve(args.remote_path, settings, "remote_path")
     local_path = _resolve(args.local_path, settings, "local_path")
+    ignore_file = _resolve(args.ignore_file, settings, "ignore_file")
     retry_count = _resolve(args.retry_count, settings, "retry_count", None)
     retry_delay = _resolve(args.retry_delay, settings, "retry_delay", 10)
     log_remote_dir = _resolve(args.log_remote_dir, settings, "log_remote_dir")
@@ -139,6 +145,7 @@ def run_cli(args):
         resume=resume,
         wait_for_network=wait_for_network,
         recursive=recursive,
+        ignore_file=ignore_file or None,
         retry_count=retry_count,
         retry_delay=retry_delay,
         upload_log=upload_log,

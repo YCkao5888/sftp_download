@@ -17,7 +17,7 @@ def make_args(**overrides):
     defaults = dict(
         cli=True, config=None, host=None, port=None, username=None, device_name=None,
         version_info=None, password=None, key_file=None, remote_path=None, local_path=None,
-        no_auto_reconnect=False, no_resume=False, no_wait_network=False, no_recursive=False,
+        ignore_file=None, no_auto_reconnect=False, no_resume=False, no_wait_network=False, no_recursive=False,
         retry_count=None, retry_delay=None, upload_log=False, log_remote_dir=None, log_dir=None,
         duplicate_mode=None, duplicate_suffix=None,
     )
@@ -87,6 +87,28 @@ class TestRunCliSettingsOnly:
         args = make_args(config=str(settings_path), host="192.168.9.9")
         main_module.run_cli(args)
         assert captured["kwargs"]["host"] == "192.168.9.9"
+
+    def test_ignore_file_resolved_from_settings(self, tmp_path, monkeypatch):
+        captured = self._fake_downloader_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path, ignore_file="ignore_rules.txt")
+        args = make_args(config=str(settings_path))
+        main_module.run_cli(args)
+        assert captured["kwargs"]["ignore_file"] == "ignore_rules.txt"
+
+    def test_ignore_file_cli_overrides_settings(self, tmp_path, monkeypatch):
+        captured = self._fake_downloader_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path, ignore_file="from_settings.txt")
+        args = make_args(config=str(settings_path), ignore_file="from_cli.txt")
+        main_module.run_cli(args)
+        assert captured["kwargs"]["ignore_file"] == "from_cli.txt"
+
+    def test_ignore_file_empty_string_in_settings_passed_as_none(self, tmp_path, monkeypatch):
+        # 設定檔中留空字串（範本預設值）代表未設定，不應被當成路徑傳入。
+        captured = self._fake_downloader_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path, ignore_file="")
+        args = make_args(config=str(settings_path))
+        main_module.run_cli(args)
+        assert captured["kwargs"]["ignore_file"] is None
 
     def test_failed_download_returns_exit_code_one(self, tmp_path, monkeypatch):
         class FailingDownloader:

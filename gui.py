@@ -349,6 +349,7 @@ class SFTPDownloaderGUI:
             resume=self.resume_var.get(),
             wait_for_network=self.wait_network_var.get(),
             recursive=self.recursive_var.get(),
+            ignore_file=self.settings.get("ignore_file") or None,
             retry_count=self.settings.get("retry_count"),
             retry_delay=self.settings.get("retry_delay", 10),
             upload_log=self.upload_log_var.get(),

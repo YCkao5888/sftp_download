@@ -14,6 +14,8 @@ from pathlib import Path
 
 import paramiko
 
+from gitignore import GitIgnoreSpec
+
 CHUNK_SIZE = 32768
 SOCKET_TIMEOUT = 30
 KEEPALIVE_INTERVAL = 15
@@ -112,6 +114,7 @@ class SFTPDownloader:
         resume=True,
         wait_for_network=True,
         recursive=True,
+        ignore_file=None,
         retry_count=None,
         retry_delay=10,
         upload_log=False,
@@ -132,6 +135,7 @@ class SFTPDownloader:
         self.resume = resume
         self.wait_for_network = wait_for_network
         self.recursive = recursive  # True：下載所有子資料夾（多層）；False：只下載該路徑下的檔案（單層）
+        self.ignore_file = ignore_file  # 下載忽略設定檔路徑（格式同 .gitignore），None 或檔案不存在代表無需忽略
         self.retry_count = retry_count  # None 或 <= 0 代表無限次重試
         self.retry_delay = retry_delay
         self.upload_log = upload_log
@@ -144,6 +148,7 @@ class SFTPDownloader:
         self.client = None
         self.sftp = None
         self._manifest = {}
+        self._ignore_spec = None
 
     def _retry_limit_reached(self, attempts):
         if self.retry_count is None or self.retry_count <= 0:
@@ -211,11 +216,45 @@ class SFTPDownloader:
         except Exception:
             pass
 
+    def _load_ignore_spec(self):
+        """讀取「下載忽略設定檔」（格式同 .gitignore）。未設定或檔案不存在代表無需忽略；
+        格式錯誤的規則逐行略過並記錄警告，其餘正確的規則仍照常生效。"""
+        if not self.ignore_file:
+            return None
+        path = Path(self.ignore_file)
+        if not path.exists():
+            self.logger.info(f"下載忽略設定檔不存在，不忽略任何檔案: {path}")
+            return None
+        try:
+            # utf-8-sig：Windows 記事本以 UTF-8 存檔時常會加上 BOM，若不去除，
+            # BOM 會黏在第一行規則前面，導致第一條規則永遠比對不到。
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
+        except (OSError, UnicodeDecodeError) as e:
+            self.logger.warning(f"下載忽略設定檔讀取失敗，不忽略任何檔案: {e}")
+            return None
+        valid_lines = []
+        for lineno, line in enumerate(lines, 1):
+            try:
+                GitIgnoreSpec.from_lines([line])
+                valid_lines.append(line)
+            except ValueError:
+                self.logger.warning(f"下載忽略設定檔第 {lineno} 行格式錯誤，已略過此規則: {line!r}")
+        self.logger.info(f"已載入下載忽略設定檔: {path}")
+        return GitIgnoreSpec.from_lines(valid_lines)
+
+    def _is_ignored(self, rel_path):
+        """rel_path 為相對於下載根目錄的路徑；資料夾請加上結尾的 /（gitignore 的資料夾規則才會匹配）。"""
+        return self._ignore_spec is not None and self._ignore_spec.match_file(rel_path)
+
     def _list_remote_files(self, remote_root, local_root):
         files = []
         root_stat = self.sftp.stat(remote_root)
         if not stat.S_ISDIR(root_stat.st_mode):
-            files.append((remote_root, os.path.basename(remote_root.rstrip("/"))))
+            filename = os.path.basename(remote_root.rstrip("/"))
+            if self._is_ignored(filename):
+                self.logger.info(f"依忽略設定檔略過: {filename}")
+            else:
+                files.append((remote_root, filename))
         elif self.recursive:
             self._walk_remote_dir(remote_root, "", files, local_root)
         else:
@@ -223,6 +262,8 @@ class SFTPDownloader:
             for entry in self.sftp.listdir_attr(remote_root):
                 if stat.S_ISDIR(entry.st_mode):
                     skipped_dirs.append(entry.filename)
+                elif self._is_ignored(entry.filename):
+                    self.logger.info(f"依忽略設定檔略過: {entry.filename}")
                 else:
                     remote_path = remote_root.rstrip("/") + "/" + entry.filename
                     files.append((remote_path, entry.filename))
@@ -239,7 +280,13 @@ class SFTPDownloader:
             remote_path = remote_dir.rstrip("/") + "/" + entry.filename
             rel_path = f"{rel_dir}/{entry.filename}" if rel_dir else entry.filename
             if stat.S_ISDIR(entry.st_mode):
+                # 被忽略的資料夾整棵略過、不往下走訪，本地端也不會建立對應資料夾（與 git 行為一致）。
+                if self._is_ignored(rel_path + "/"):
+                    self.logger.info(f"依忽略設定檔略過資料夾: {rel_path}/")
+                    continue
                 self._walk_remote_dir(remote_path, rel_path, files, local_root)
+            elif self._is_ignored(rel_path):
+                self.logger.info(f"依忽略設定檔略過: {rel_path}")
             else:
                 files.append((remote_path, rel_path))
 
@@ -425,6 +472,7 @@ class SFTPDownloader:
         local_root = Path(self.local_path)
         local_root.mkdir(parents=True, exist_ok=True)
         self._manifest = self._load_manifest(local_root) if self.resume else {}
+        self._ignore_spec = self._load_ignore_spec()
 
         downloaded, skipped, failed = 0, 0, []
         try:
