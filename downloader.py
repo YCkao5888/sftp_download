@@ -1,6 +1,7 @@
 """SFTP 下載核心邏輯：連線、斷線重連、斷點續傳、Log 紀錄與回傳。"""
 
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -271,6 +272,18 @@ class SFTPDownloader:
             n += 1
         return candidate
 
+    def _hash_local_file(self, local_file):
+        """計算本地端檔案目前內容的 SHA-256（只讀本機磁碟，不牽涉網路），
+        回傳 hashlib 雜湊物件，方便驗證後可直接沿用繼續累加後續新下載的內容。"""
+        local_hash = hashlib.sha256()
+        with open(local_file, "rb") as local_f:
+            while True:
+                chunk = local_f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                local_hash.update(chunk)
+        return local_hash
+
     def _download_one_file(self, remote_file, rel_path, local_root):
         local_file = local_root / Path(*rel_path.split("/"))
         local_file.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +294,7 @@ class SFTPDownloader:
         target_file = local_file
         local_size = 0
         mode = "wb"
+        running_hash = hashlib.sha256()  # 邊下載邊累加，最後（或中斷當下）存進版本紀錄檔
 
         if local_file.exists():
             if not self.resume:
@@ -295,66 +309,102 @@ class SFTPDownloader:
                 disk_size = local_file.stat().st_size
                 known = self._manifest.get(rel_path)
 
-                if known is not None:
-                    # 有版本紀錄可比對：紀錄與目前遠端一致，才代表本地端這份資料確定是同一版本。
-                    same_version = known.get("size") == remote_size and known.get("mtime") == remote_mtime
+                if disk_size == remote_size:
+                    # 大小相同：用版本紀錄（若有）判斷是否真的未變更；沒有紀錄則姑且視為未變更略過。
+                    # 這裡不逐一雜湊比對整個檔案內容，避免每次執行都要重新讀取所有已下載完成的檔案。
+                    if known is None or (known.get("size") == remote_size and known.get("mtime") == remote_mtime):
+                        self.logger.info(f"略過（已完整下載）: {rel_path}")
+                        self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
+                        self._save_manifest(local_root)
+                        return "skipped"
+                    if self.duplicate_mode == "overwrite":
+                        self.logger.info(f"偵測到來源檔案已更新，覆蓋舊檔案: {rel_path}")
+                    else:
+                        target_file = self._next_duplicate_path(local_file)
+                        self.logger.info(f"偵測到來源檔案已更新，另存為: {target_file.name}")
+                elif disk_size > remote_size:
+                    if self.duplicate_mode == "overwrite":
+                        self.logger.warning(f"本地檔案大於遠端檔案，重新下載: {rel_path}")
+                    else:
+                        target_file = self._next_duplicate_path(local_file)
+                        self.logger.warning(f"本地檔案大於遠端檔案，另存為: {target_file.name}")
+                elif self.duplicate_mode == "duplicate":
+                    # 「另存新檔」模式一律整份重新下載、不接續舊檔案，斷點續傳形同停用，不需要驗證內容。
+                    target_file = self._next_duplicate_path(local_file)
+                    self.logger.info(f"重新下載，另存為: {target_file.name}")
                 else:
-                    # 沒有版本紀錄可比對（例如這台裝置第一次遇到這個檔名），無法確定是否同一版本。
-                    same_version = None
+                    # 本地檔案比遠端小：檢查遠端版本是否仍與紀錄一致，並用「本地端雜湊」確認這段尚未
+                    # 下載完的內容有沒有被外部更動過（例如被人手動修改）。這裡刻意只讀本機磁碟跟紀錄檔
+                    # 裡存的雜湊比對，不會為了驗證而重新從遠端讀取已下載的內容，避免已下載比例越高、
+                    # 驗證反而越花時間、越像卡住的問題。
+                    same_remote_version = (
+                        known is not None
+                        and known.get("size") == remote_size
+                        and known.get("mtime") == remote_mtime
+                    )
+                    verified = False
+                    if same_remote_version and known.get("local_bytes") == disk_size and known.get("local_sha256"):
+                        disk_hash = self._hash_local_file(local_file)
+                        if disk_hash.hexdigest() == known["local_sha256"]:
+                            verified = True
+                            running_hash = disk_hash  # 直接沿用，後續新下載的內容繼續累加上去
 
-                if same_version is not False and disk_size == remote_size:
-                    self.logger.info(f"略過（已完整下載）: {rel_path}")
-                    self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
-                    self._save_manifest(local_root)
-                    return "skipped"
-
-                if same_version is True and disk_size > remote_size:
-                    # 確認是同一版本，只是本地端異常比遠端大，直接修正即可，不算「來源已更新」的情境。
-                    self.logger.warning(f"本地檔案大於遠端檔案，重新下載: {rel_path}")
-                elif same_version is True and disk_size < remote_size:
-                    # 已「確認」是同一版本、只是尚未下載完成 -> 可以安全接續；
-                    # 但「另存新檔」模式一律整份重新下載、不接續舊檔案，斷點續傳形同停用。
-                    if self.duplicate_mode != "duplicate":
+                    if verified:
+                        self.logger.info(f"本地端內容雜湊比對相符，接續下載: {rel_path}")
                         local_size = disk_size
                         mode = "ab"
                     else:
-                        target_file = self._next_duplicate_path(local_file)
-                        self.logger.info(f"重新下載，另存為: {target_file.name}")
-                else:
-                    # same_version 為 False（確認版本不同）或 None（沒有版本紀錄、大小又對不上，
-                    # 無法判斷本地內容是否真的是目前這個版本的一部分——貿然接續可能把新舊內容
-                    # 混在一起造成損毀，因此一律視為需要整份重新下載，交給 duplicate_mode 決定）。
-                    reason = "偵測到來源檔案已更新" if same_version is False else "重新下載"
-                    if self.duplicate_mode == "overwrite":
-                        self.logger.info(f"{reason}，覆蓋舊檔案: {rel_path}")
-                    else:
-                        target_file = self._next_duplicate_path(local_file)
-                        self.logger.info(f"{reason}，另存為: {target_file.name}")
-
-        if self.resume:
-            # 開始寫入前就先記錄這次要抓的遠端版本（大小＋修改時間），即使下載中途被中斷，
-            # 下次重試時也能正確比對出「這是同一版本尚未下載完的部分，可以安全接續」，
-            # 而不是等到完整下載成功才記錄，導致每次中斷後的重試都只能靠猜的。
-            self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
-            self._save_manifest(local_root)
+                        reason = "本地檔案內容與紀錄不符（可能已被人為修改）" if same_remote_version else "偵測到來源檔案已更新"
+                        if self.duplicate_mode == "overwrite":
+                            self.logger.info(f"{reason}，覆蓋舊檔案: {rel_path}")
+                        else:
+                            target_file = self._next_duplicate_path(local_file)
+                            self.logger.info(f"{reason}，另存為: {target_file.name}")
 
         self.logger.info(f"開始下載: {rel_path} ({format_size(remote_size)})")
         last_pct_logged = -1
-        with self.sftp.open(remote_file, "rb") as remote_f:
-            remote_f.seek(local_size)
-            with open(target_file, mode) as local_f:
-                transferred = local_size
-                while True:
-                    chunk = remote_f.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    local_f.write(chunk)
-                    transferred += len(chunk)
-                    if remote_size > 0:
-                        pct = int(transferred / remote_size * 100)
-                        if pct > last_pct_logged:
-                            self.logger.info(f"  {rel_path} 進度: {pct}%")
-                            last_pct_logged = pct
+        last_checkpoint_pct = -1
+        transferred = local_size
+        try:
+            with self.sftp.open(remote_file, "rb") as remote_f:
+                remote_f.seek(local_size)
+                with open(target_file, mode) as local_f:
+                    while True:
+                        chunk = remote_f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        local_f.write(chunk)
+                        running_hash.update(chunk)
+                        transferred += len(chunk)
+                        if remote_size > 0:
+                            pct = int(transferred / remote_size * 100)
+                            if pct > last_pct_logged:
+                                self.logger.info(f"  {rel_path} 進度: {pct}%")
+                                last_pct_logged = pct
+                            # 每跨過 10% 進度就存一次檢查點，而不是每個 chunk 都寫檔，
+                            # 避免大檔案下載時頻繁寫入版本紀錄檔造成不必要的效能負擔。
+                            if self.resume and pct >= last_checkpoint_pct + 10:
+                                local_f.flush()
+                                self._manifest[rel_path] = {
+                                    "size": remote_size,
+                                    "mtime": remote_mtime,
+                                    "local_sha256": running_hash.hexdigest(),
+                                    "local_bytes": transferred,
+                                }
+                                self._save_manifest(local_root)
+                                last_checkpoint_pct = pct
+        finally:
+            # 不論成功、失敗或中途被中斷，都存下目前實際寫到的位置與雜湊，讓下次重試時
+            # 能正確判斷「這是同一版本尚未下載完的部分」，而不是每次中斷後都只能整份重來。
+            if self.resume:
+                self._manifest[rel_path] = {
+                    "size": remote_size,
+                    "mtime": remote_mtime,
+                    "local_sha256": running_hash.hexdigest(),
+                    "local_bytes": transferred,
+                }
+                self._save_manifest(local_root)
+
         self.logger.info(f"完成下載: {target_file.name if target_file != local_file else rel_path}")
         return "downloaded"
 
