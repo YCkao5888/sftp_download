@@ -6,7 +6,14 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from downloader import SFTPDownloader, create_logger
-from settings import SETTINGS_PATH, ensure_settings_file, load_settings, open_in_default_app
+from settings import (
+    SETTINGS_PATH,
+    SETTINGS_TEMPLATE,
+    ensure_settings_file,
+    load_settings,
+    open_in_default_app,
+    save_settings,
+)
 
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 
@@ -83,6 +90,7 @@ class SFTPDownloaderGUI:
         settings_bar.grid(row=0, column=0, sticky="we", pady=(0, 8))
         ttk.Button(settings_bar, text="載入設定檔...", command=self._load_settings_file).pack(side="left")
         ttk.Button(settings_bar, text="開啟設定檔", command=self._open_settings_file).pack(side="left", padx=(6, 0))
+        ttk.Button(settings_bar, text="匯出設定檔...", command=self._export_settings_file).pack(side="left", padx=(6, 0))
 
         steps = (
             "操作步驟：① 如已有設定檔，先按「載入設定檔」自動帶入欄位　"
@@ -268,12 +276,13 @@ class SFTPDownloaderGUI:
         self._update_title()
         self.status_var.set(f"已載入設定檔：{self.settings_path.name}")
 
-    def _open_settings_file(self):
+    def _collect_fields(self):
+        """收集目前畫面上所有欄位的值（鍵名同 settings.json 的欄位）。"""
         try:
             port = int(self.port_var.get().strip() or "22")
         except ValueError:
             port = 22
-        seed = {
+        return {
             "host": self.host_var.get().strip(),
             "port": port,
             "device_name": self.device_name_var.get().strip(),
@@ -291,9 +300,34 @@ class SFTPDownloaderGUI:
             "duplicate_suffix": self.duplicate_suffix_var.get().strip(),
             "version_info": self.version_info_var.get().strip(),
         }
-        ensure_settings_file(self.settings_path, seed=seed)
+
+    def _open_settings_file(self):
+        ensure_settings_file(self.settings_path, seed=self._collect_fields())
         open_in_default_app(self.settings_path)
         messagebox.showinfo("設定檔", f"已開啟設定檔：\n{self.settings_path}\n\n編輯並儲存後，請按「載入設定檔」重新載入（或重新啟動程式）以套用變更。")
+
+    def _export_settings_file(self):
+        chosen = filedialog.asksaveasfilename(
+            title="匯出設定檔",
+            initialdir=str(self.settings_path.parent),
+            initialfile="settings.json",
+            defaultextension=".json",
+            filetypes=[("JSON 設定檔", "*.json"), ("所有檔案", "*.*")],
+        )
+        if not chosen:
+            return
+        # 範本補齊所有欄位 → 疊上目前載入設定檔的值（保留 GUI 沒有欄位的設定，
+        # 如 key_file、retry_count、ignore_file）→ 最後以畫面上目前的欄位值為準。
+        data = dict(SETTINGS_TEMPLATE)
+        data.update(self.settings)
+        data.update(self._collect_fields())
+        try:
+            save_settings(chosen, data)
+        except OSError as e:
+            messagebox.showerror("匯出失敗", f"設定檔寫入失敗：\n{e}")
+            return
+        self.status_var.set(f"已匯出設定檔：{Path(chosen).name}")
+        messagebox.showinfo("匯出設定檔", f"已匯出設定檔：\n{chosen}")
 
     def _browse_local_path(self):
         path = filedialog.askdirectory()

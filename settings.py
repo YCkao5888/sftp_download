@@ -45,6 +45,14 @@ def load_settings(path=SETTINGS_PATH):
         return {}
 
 
+def save_settings(path, data):
+    """把設定內容寫成 JSON 檔（覆蓋既有內容），回傳檔案路徑。"""
+    path = Path(path)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return path
+
+
 def ensure_settings_file(path=SETTINGS_PATH, seed=None):
     """若設定檔不存在則建立一份（可用目前畫面上的值當作起始內容），回傳檔案路徑。"""
     path = Path(path)

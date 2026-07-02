@@ -34,6 +34,27 @@ class TestLoadSettings:
         assert settings_module.load_settings(path) == {}
 
 
+class TestSaveSettings:
+    def test_writes_json_readable_by_load_settings(self, tmp_path):
+        path = tmp_path / "exported.json"
+        data = {"host": "10.0.0.1", "port": 22, "recursive": False, "device_name": "邊緣裝置-1"}
+        result_path = settings_module.save_settings(path, data)
+        assert result_path == path
+        assert settings_module.load_settings(path) == data
+
+    def test_overwrites_existing_file(self, tmp_path):
+        path = tmp_path / "exported.json"
+        path.write_text(json.dumps({"host": "old"}), encoding="utf-8")
+        settings_module.save_settings(path, {"host": "new"})
+        assert settings_module.load_settings(path) == {"host": "new"}
+
+    def test_chinese_characters_saved_as_readable_text_not_escaped(self, tmp_path):
+        # ensure_ascii=False：中文以原字元存檔，方便使用者直接用記事本檢視編輯。
+        path = tmp_path / "exported.json"
+        settings_module.save_settings(path, {"device_name": "測試裝置"})
+        assert "測試裝置" in path.read_text(encoding="utf-8")
+
+
 class TestEnsureSettingsFile:
     def test_creates_file_from_template_when_missing(self, tmp_path):
         path = tmp_path / "settings.json"
