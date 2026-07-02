@@ -278,31 +278,65 @@ class SFTPDownloader:
         remote_size = remote_stat.st_size
         remote_mtime = int(remote_stat.st_mtime)
 
-        known = self._manifest.get(rel_path) if self.resume else None
         target_file = local_file
         local_size = 0
         mode = "wb"
 
-        if not self.resume:
-            pass
-        elif known is not None and (known.get("size") != remote_size or known.get("mtime") != remote_mtime):
-            # 之前已追蹤過這個遠端檔案的版本，但這次抓到的 size/mtime 跟上次不同 -> 來源已更新。
-            # 用新版內容接續舊版檔案會造成資料混雜，因此不論哪種模式都一定是整份重新下載（mode 維持 "wb"）。
-            if self.duplicate_mode == "overwrite":
-                self.logger.info(f"偵測到來源檔案已更新（版本與上次紀錄不同），覆蓋舊檔案: {rel_path}")
+        if local_file.exists():
+            if not self.resume:
+                # 斷點續傳未啟用：不判斷是否未變更、也不接續，一律整份重新下載；
+                # 但存到哪個檔名仍然要依 duplicate_mode 決定，這一步跟斷點續傳是否啟用無關。
+                if self.duplicate_mode == "overwrite":
+                    self.logger.info(f"重新下載並覆蓋舊檔案: {rel_path}")
+                else:
+                    target_file = self._next_duplicate_path(local_file)
+                    self.logger.info(f"重新下載，另存為: {target_file.name}")
             else:
-                target_file = self._next_duplicate_path(local_file)
-                self.logger.info(f"偵測到來源檔案已更新（版本與上次紀錄不同），另存為: {target_file.name}")
-        elif local_file.exists():
-            local_size = local_file.stat().st_size
-            if local_size == remote_size:
-                self.logger.info(f"略過（已完整下載）: {rel_path}")
-                return "skipped"
-            elif local_size > remote_size:
-                self.logger.warning(f"本地檔案大於遠端檔案，重新下載: {rel_path}")
-                local_size = 0
-            else:
-                mode = "ab"
+                disk_size = local_file.stat().st_size
+                known = self._manifest.get(rel_path)
+
+                if known is not None:
+                    # 有版本紀錄可比對：紀錄與目前遠端一致，才代表本地端這份資料確定是同一版本。
+                    same_version = known.get("size") == remote_size and known.get("mtime") == remote_mtime
+                else:
+                    # 沒有版本紀錄可比對（例如這台裝置第一次遇到這個檔名），無法確定是否同一版本。
+                    same_version = None
+
+                if same_version is not False and disk_size == remote_size:
+                    self.logger.info(f"略過（已完整下載）: {rel_path}")
+                    self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
+                    self._save_manifest(local_root)
+                    return "skipped"
+
+                if same_version is True and disk_size > remote_size:
+                    # 確認是同一版本，只是本地端異常比遠端大，直接修正即可，不算「來源已更新」的情境。
+                    self.logger.warning(f"本地檔案大於遠端檔案，重新下載: {rel_path}")
+                elif same_version is True and disk_size < remote_size:
+                    # 已「確認」是同一版本、只是尚未下載完成 -> 可以安全接續；
+                    # 但「另存新檔」模式一律整份重新下載、不接續舊檔案，斷點續傳形同停用。
+                    if self.duplicate_mode != "duplicate":
+                        local_size = disk_size
+                        mode = "ab"
+                    else:
+                        target_file = self._next_duplicate_path(local_file)
+                        self.logger.info(f"重新下載，另存為: {target_file.name}")
+                else:
+                    # same_version 為 False（確認版本不同）或 None（沒有版本紀錄、大小又對不上，
+                    # 無法判斷本地內容是否真的是目前這個版本的一部分——貿然接續可能把新舊內容
+                    # 混在一起造成損毀，因此一律視為需要整份重新下載，交給 duplicate_mode 決定）。
+                    reason = "偵測到來源檔案已更新" if same_version is False else "重新下載"
+                    if self.duplicate_mode == "overwrite":
+                        self.logger.info(f"{reason}，覆蓋舊檔案: {rel_path}")
+                    else:
+                        target_file = self._next_duplicate_path(local_file)
+                        self.logger.info(f"{reason}，另存為: {target_file.name}")
+
+        if self.resume:
+            # 開始寫入前就先記錄這次要抓的遠端版本（大小＋修改時間），即使下載中途被中斷，
+            # 下次重試時也能正確比對出「這是同一版本尚未下載完的部分，可以安全接續」，
+            # 而不是等到完整下載成功才記錄，導致每次中斷後的重試都只能靠猜的。
+            self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
+            self._save_manifest(local_root)
 
         self.logger.info(f"開始下載: {rel_path} ({format_size(remote_size)})")
         last_pct_logged = -1
@@ -322,11 +356,6 @@ class SFTPDownloader:
                             self.logger.info(f"  {rel_path} 進度: {pct}%")
                             last_pct_logged = pct
         self.logger.info(f"完成下載: {target_file.name if target_file != local_file else rel_path}")
-
-        if self.resume:
-            self._manifest[rel_path] = {"size": remote_size, "mtime": remote_mtime}
-            self._save_manifest(local_root)
-
         return "downloaded"
 
     def _upload_log_file(self):
