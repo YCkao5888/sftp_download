@@ -127,6 +127,8 @@ class SFTPDownloader:
         self.host = host
         self.port = port
         self.username = username
+        # 單一字串或路徑陣列皆可：陣列時各來源路徑的內容會合併下載到同一個 local_path，
+        # 適合把「標準路徑 + 各船專屬路徑」合併成一個完整專案。
         self.remote_path = remote_path
         self.local_path = local_path
         self.password = password
@@ -453,12 +455,26 @@ class SFTPDownloader:
         self.logger.info(f"完成下載: {target_file.name if target_file != local_file else rel_path}")
         return "downloaded"
 
+    def _ensure_remote_dir(self, remote_dir):
+        """從根目錄逐層確認/建立遠端目錄（等同 mkdir -p），已存在的層級略過。
+        佔位符展開後的每船/每機 Log 目錄（如 /fleet/.../WH289/IPC-1/sftp_logs）
+        伺服器上通常尚未存在，直接 put 會失敗。"""
+        parts = [p for p in remote_dir.split("/") if p]
+        current = "/" if remote_dir.startswith("/") else ""
+        for part in parts:
+            current = current.rstrip("/") + "/" + part if current else part
+            try:
+                self.sftp.stat(current)
+            except FileNotFoundError:
+                self.sftp.mkdir(current)
+
     def _upload_log_file(self):
         try:
             self.logger.info("正在上傳 Log 檔至 SFTP...")
             for handler in self.logger.handlers:
                 handler.flush()
             self._connect_with_retry()
+            self._ensure_remote_dir(self.remote_log_dir)
             remote_name = self.remote_log_dir.rstrip("/") + "/" + Path(self.log_file).name
             self.sftp.put(str(self.log_file), remote_name)
             self.logger.info(f"Log 上傳完成: {remote_name}")
@@ -480,15 +496,20 @@ class SFTPDownloader:
                 self._wait_for_network()
             self._connect_with_retry()
 
+            remote_paths = self.remote_path if isinstance(self.remote_path, list) else [self.remote_path]
             file_list = None
             list_attempts = 0
             while file_list is None:
+                current_root = None
                 try:
-                    file_list = self._list_remote_files(self.remote_path, local_root)
+                    file_list = []
+                    for current_root in remote_paths:
+                        file_list.extend(self._list_remote_files(current_root, local_root))
                 except FileNotFoundError:
-                    self.logger.error(f"遠端路徑不存在: {self.remote_path}")
+                    self.logger.error(f"遠端路徑不存在: {current_root}")
                     return False
                 except (paramiko.SSHException, OSError, EOFError) as e:
+                    file_list = None
                     list_attempts += 1
                     self.logger.warning(f"列出遠端檔案清單發生錯誤（第 {list_attempts} 次）: {e}")
                     if not self.auto_reconnect or self._retry_limit_reached(list_attempts):
@@ -496,7 +517,19 @@ class SFTPDownloader:
                         return False
                     self._connect_with_retry()
 
-            self.logger.info(f"共發現 {len(file_list)} 個檔案")
+            # 多個來源路徑合併時，若不同來源含有相同的相對路徑，後面的來源會覆蓋前面的
+            # （版本紀錄也以後者為準），僅保留最後一筆並記錄警告。
+            deduped = {}
+            for remote_file, rel_path in file_list:
+                if rel_path in deduped and deduped[rel_path] != remote_file:
+                    self.logger.warning(f"多個來源路徑都含有 {rel_path}，以後面的來源為準: {remote_file}")
+                deduped[rel_path] = remote_file
+            file_list = [(remote_file, rel_path) for rel_path, remote_file in deduped.items()]
+
+            if len(remote_paths) > 1:
+                self.logger.info(f"共 {len(remote_paths)} 個來源路徑，合併後發現 {len(file_list)} 個檔案")
+            else:
+                self.logger.info(f"共發現 {len(file_list)} 個檔案")
 
             for remote_file, rel_path in file_list:
                 attempts = 0

@@ -733,6 +733,37 @@ class TestDownloadOneFileCheckpointing:
 # _upload_log_file
 # ---------------------------------------------------------------------------
 
+class TestEnsureRemoteDir:
+    def test_creates_all_missing_levels(self, downloader_factory, fake_sftp_factory):
+        d = downloader_factory()
+        d.sftp = fake_sftp_factory(files={})
+        d._ensure_remote_dir("/fleet/WH289/IPC-1/sftp_logs")
+        assert d.sftp.mkdir_calls == ["/fleet", "/fleet/WH289", "/fleet/WH289/IPC-1", "/fleet/WH289/IPC-1/sftp_logs"]
+
+    def test_existing_levels_are_not_recreated(self, downloader_factory, fake_sftp_factory):
+        d = downloader_factory()
+        d.sftp = fake_sftp_factory(files={"/fleet/WH289/readme.txt": b"x"})
+        d._ensure_remote_dir("/fleet/WH289/sftp_logs")
+        assert d.sftp.mkdir_calls == ["/fleet/WH289/sftp_logs"]
+
+    def test_fully_existing_path_creates_nothing(self, downloader_factory, fake_sftp_factory):
+        d = downloader_factory()
+        d.sftp = fake_sftp_factory(files={"/data/logs/old.csv": b"x"})
+        d._ensure_remote_dir("/data/logs")
+        assert d.sftp.mkdir_calls == []
+
+    def test_upload_log_creates_remote_dir_before_put(self, downloader_factory, fake_sftp_factory, tmp_path):
+        log_file = tmp_path / "run.csv"
+        log_file.write_text("data", encoding="utf-8")
+        d = downloader_factory(remote_log_dir="/fleet/WH289/IPC-1/sftp_logs", log_file=str(log_file))
+        d.logger.addHandler(logging.NullHandler())
+        d._connect_with_retry = MagicMock()
+        d.sftp = fake_sftp_factory(files={})
+        d._upload_log_file()
+        assert "/fleet/WH289/IPC-1/sftp_logs" in d.sftp.dirs
+        assert "/fleet/WH289/IPC-1/sftp_logs/run.csv" in d.sftp.files
+
+
 class TestUploadLogFile:
     def test_successful_upload(self, downloader_factory, fake_sftp_factory, tmp_path, logger):
         log_file = tmp_path / "run.csv"
@@ -813,6 +844,39 @@ class TestRun:
         d.remote_path = "/remote/missing"
         result = d.run()
         assert result is False
+
+    def test_remote_path_list_merges_all_sources_into_local_path(self, downloader_factory, fake_sftp_factory, tmp_path):
+        d = self._prepare(
+            downloader_factory, fake_sftp_factory,
+            files={"/standard/proj/a.txt": b"A", "/unique/WH289/proj/config.json": b"{}"},
+            mtimes={"/standard/proj/a.txt": 1, "/unique/WH289/proj/config.json": 2},
+            remote_path=["/standard/proj", "/unique/WH289/proj"],
+        )
+        assert d.run() is True
+        assert (tmp_path / "a.txt").read_bytes() == b"A"
+        assert (tmp_path / "config.json").read_bytes() == b"{}"
+
+    def test_remote_path_list_duplicate_rel_path_last_source_wins(self, downloader_factory, fake_sftp_factory, tmp_path, caplog):
+        d = self._prepare(
+            downloader_factory, fake_sftp_factory,
+            files={"/standard/proj/config.json": b"standard", "/unique/proj/config.json": b"unique"},
+            mtimes={"/standard/proj/config.json": 1, "/unique/proj/config.json": 2},
+            remote_path=["/standard/proj", "/unique/proj"],
+        )
+        with caplog.at_level(logging.WARNING):
+            assert d.run() is True
+        assert (tmp_path / "config.json").read_bytes() == b"unique"
+        assert any("以後面的來源為準" in r.message for r in caplog.records)
+
+    def test_remote_path_list_missing_source_returns_false_and_names_it(self, downloader_factory, fake_sftp_factory, caplog):
+        d = self._prepare(
+            downloader_factory, fake_sftp_factory,
+            files={"/standard/proj/a.txt": b"A"},
+            remote_path=["/standard/proj", "/unique/missing"],
+        )
+        with caplog.at_level(logging.ERROR):
+            assert d.run() is False
+        assert any("/unique/missing" in r.message for r in caplog.records)
 
     def test_listing_error_retries_then_succeeds(self, downloader_factory, fake_sftp_factory):
         d = downloader_factory(wait_for_network=False, retry_count=3)

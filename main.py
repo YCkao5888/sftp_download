@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from downloader import SFTPDownloader, create_logger
-from settings import load_settings
+from settings import PlaceholderError, load_settings
 
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 
@@ -43,7 +43,11 @@ def build_parser():
     )
     parser.add_argument("--password", help="SFTP 密碼（可用環境變數 SFTP_PASSWORD 取代，避免明碼留在指令紀錄）")
     parser.add_argument("--key-file", help="SSH 私鑰檔路徑（若使用金鑰登入，取代 --password）")
-    parser.add_argument("--remote-path", help="SFTP 來源路徑（檔案或目錄）")
+    parser.add_argument(
+        "--remote-path",
+        action="append",
+        help="SFTP 來源路徑（檔案或目錄）。可重複指定多次，多個來源會合併下載到同一個本地端儲存路徑",
+    )
     parser.add_argument("--local-path", help="本地端儲存路徑")
     parser.add_argument(
         "--ignore-file",
@@ -84,7 +88,11 @@ def _resolve(cli_value, settings, key, fallback=None):
 
 
 def run_cli(args):
-    settings = load_settings(args.config) if args.config else load_settings()
+    try:
+        settings = load_settings(args.config) if args.config else load_settings()
+    except PlaceholderError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
 
     host = _resolve(args.host, settings, "host")
     port = _resolve(args.port, settings, "port", 22)
