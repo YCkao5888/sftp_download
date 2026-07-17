@@ -131,7 +131,7 @@ cp example_settings.json settings.json
 | `username` | `--username` | `"myuser"` | SFTP 登入帳號（必填） |
 | `password` | `--password` / 環境變數 `SFTP_PASSWORD` | `"your_password"` | SFTP 登入密碼。若改用 `key_file` 金鑰登入則留空字串 `""`；未提供時 CLI 會互動提示輸入 |
 | `key_file` | `--key-file` | `"C:\\Users\\me\\.ssh\\id_rsa"` 或 `""` | SSH 私鑰檔路徑，填寫後會取代密碼登入；不使用金鑰登入則留空字串 |
-| `remote_path` | `--remote-path` | `"/data/reports"` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄預設會含子目錄一併遞迴下載，可用 `recursive` 設定改為只下載當層）（必填）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
+| `remote_path` | `--remote-path`（可重複指定多次） | `"/data/reports"` 或 `["/data/std", "/data/{vsl_name}/proj"]` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄預設會含子目錄一併遞迴下載，可用 `recursive` 設定改為只下載當層）（必填）。**可填路徑陣列**，多個來源的內容會合併下載到同一個 `local_path`（詳見下方【多來源路徑合併】）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
 | `local_path` | `--local-path` | `"C:\\Users\\me\\Downloads"` | 下載後要存放的本機資料夾路徑（必填），可用本機作業系統慣用的路徑格式 |
 | `auto_reconnect` | `--no-auto-reconnect`（僅能停用） | `true` / `false` | 下載中斷線時是否自動重新連線並接續下載，未填預設 `true` |
 | `resume` | `--no-resume`（僅能停用） | `true` / `false` | 是否啟用斷點續傳（略過已完整下載的檔案、接續未下載完的部分），未填預設 `true` |
@@ -145,6 +145,54 @@ cp example_settings.json settings.json
 | `log_dir` | `--log-dir` | `""` 或 `"C:\\logs"` | 本機儲存 Log 檔（`.csv`）的資料夾，留空字串則使用預設的 `logs/` 資料夾 |
 | `duplicate_mode` | `--duplicate-mode` | `"overwrite"` 或 `"duplicate"` | 偵測到來源檔案已被更新時的處理方式：`overwrite`（**預設**，直接覆蓋舊檔案）或 `duplicate`（另存新檔、保留舊檔）；詳見下方【來源檔案更新時的版本處理】 |
 | `duplicate_suffix` | `--duplicate-suffix` | `"copy"` | `duplicate_mode` 為 `duplicate` 時，另存新檔用的檔名後綴，未填預設 `"copy"` |
+
+---
+
+## 【多來源路徑合併（remote_path 路徑陣列）】
+
+`remote_path` 除了單一字串外也可以填**路徑陣列**，多個來源路徑的內容會依序列出、合併下載到同一個 `local_path`。典型用途是把「全船共用的標準路徑」與「該船專屬的路徑」（可搭配下方佔位符）合併成一個完整專案：
+
+```json
+{
+  "remote_path": [
+    "/fleet/standard_storage/project1",
+    "/fleet/unique_storage/{vsl_name}/project1/config"
+  ],
+  "local_path": "/home/user/project1"
+}
+```
+
+- 各來源路徑各自維持原本的行為（遞迴下載、忽略設定檔、斷點續傳皆適用）；相對路徑一律相對於**各自的來源路徑**，例如上例兩個來源底下的 `a/b.txt` 都會存到 `local_path/a/b.txt`。
+- **不同來源含有相同相對路徑時，以陣列中排後面的來源為準**（前面的不會下載，Log 會記錄一筆警告）。可利用這個特性讓「該船專屬路徑」覆蓋標準路徑中的同名設定檔——把專屬路徑排在陣列後面即可。
+- 任一來源路徑不存在時任務即失敗，Log 會指出是哪一個路徑。
+- CLI 對應寫法是重複指定 `--remote-path /a --remote-path /b`；GUI 的「SFTP 來源路徑」欄位以 `;` 分隔多個路徑。
+
+---
+
+## 【設定值佔位符（依船舶資訊自動展開路徑）】
+
+每台船上裝置若備有船舶基本資訊檔 `../.env/vessel_basic_info.json`（相對於本工具資料夾的上一層，即 `share/.env/vessel_basic_info.json`），內容如：
+```json
+{
+  "vsl_name": "WH289",
+  "ipc": "IPC-1"
+}
+```
+則 `settings.json`（含 `config/` 內的各設定檔）中**所有字串欄位**（含 `remote_path` 路徑陣列裡的每個元素）都可以使用 `{key}` 形式的佔位符，載入設定檔時會自動以該檔案的對應值展開。例如：
+```json
+{
+  "device_name": "{vsl_name}_{ipc}_SFTP_DOWNLOADER",
+  "log_remote_dir": "/fleet/wanhai_nssms_deploy/{vsl_name}/{ipc}/sftp_logs"
+}
+```
+在 WH289 的 IPC-1 上會展開成 `WH289_IPC-1_SFTP_DOWNLOADER` 與 `/fleet/wanhai_nssms_deploy/WH289/IPC-1/sftp_logs`。同一份設定檔即可部署到所有船，不需逐台修改；`device_name` 用佔位符後，`init_device_name.py` 的初始化步驟也不再是必要的。
+
+- 佔位符名稱即 `vessel_basic_info.json` 內的 key，日後該檔案新增欄位即可直接當新佔位符使用。
+- **錯誤即中止**：設定檔有用到佔位符、但船舶資訊檔不存在／JSON 壞掉／找不到對應 key（例如打錯字 `{vslname}`）時，任務直接失敗並說明原因，避免把 `{vsl_name}` 字面文字當成路徑上傳到伺服器產生髒目錄。
+- 設定檔完全沒用到佔位符時，船舶資訊檔可以不存在，行為與原本完全相同。
+- 上傳 Log 時若遠端目錄（含展開後的每船/每機子目錄）尚不存在，會自動逐層建立。
+- 船舶資訊檔路徑可用環境變數 `VESSEL_INFO_PATH` 覆蓋（測試或特殊部署用）。
+- **注意**：GUI 載入設定檔後，畫面顯示的是展開後的實際值；「匯出設定檔」也會寫出展開後的值（佔位符不保留）。要維護佔位符請直接編輯 JSON 檔。另外密碼等欄位若本身含 `{...}` 字樣會被誤認為佔位符而報錯，屬罕見情況，請避免在設定值中使用大括號。
 
 ---
 

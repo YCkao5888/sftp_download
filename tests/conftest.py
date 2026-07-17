@@ -68,15 +68,21 @@ class FakeSFTPClient:
         self.files = dict(files or {})
         self.mtimes = dict(mtimes or {})
         self.put_calls = []
+        self.dirs = set()
+        self.mkdir_calls = []
 
     def stat(self, path):
         path = path.rstrip("/")
         if path in self.files:
             return FakeSFTPAttr(path, is_dir=False, size=len(self.files[path]), mtime=self.mtimes.get(path, 0))
         prefix = path + "/"
-        if path == "" or any(p.startswith(prefix) for p in self.files):
+        if path == "" or path in self.dirs or any(p.startswith(prefix) for p in self.files):
             return FakeSFTPAttr(path, is_dir=True)
         raise FileNotFoundError(f"No such file: {path}")
+
+    def mkdir(self, path):
+        self.dirs.add(path.rstrip("/"))
+        self.mkdir_calls.append(path)
 
     def listdir_attr(self, path):
         prefix = path.rstrip("/") + "/"

@@ -9,6 +9,7 @@ from downloader import SFTPDownloader, create_logger
 from settings import (
     SETTINGS_PATH,
     SETTINGS_TEMPLATE,
+    PlaceholderError,
     ensure_settings_file,
     load_settings,
     open_in_default_app,
@@ -23,7 +24,11 @@ class SFTPDownloaderGUI:
         self.root = root
         self.downloader = None
         self.settings_path = SETTINGS_PATH
-        self.settings = load_settings(self.settings_path)
+        try:
+            self.settings = load_settings(self.settings_path)
+        except PlaceholderError as e:
+            messagebox.showerror("設定檔載入失敗", str(e))
+            self.settings = {}
         self._build_widgets()
         self._apply_settings_to_fields()
         self._toggle_log_dir()
@@ -134,7 +139,7 @@ class SFTPDownloaderGUI:
         path_frame.grid(row=4, column=0, sticky="we", pady=(0, 8))
         path_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(path_frame, text="SFTP 來源路徑 *").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(path_frame, text="SFTP 來源路徑 *\n（多個路徑以 ; 分隔）").grid(row=0, column=0, sticky="w", **pad)
         self.remote_path_var = tk.StringVar()
         ttk.Entry(path_frame, textvariable=self.remote_path_var).grid(
             row=0, column=1, columnspan=2, sticky="we", **pad
@@ -243,7 +248,11 @@ class SFTPDownloaderGUI:
         self.device_name_var.set(s.get("device_name", self.device_name_var.get()))
         self.username_var.set(s.get("username", self.username_var.get()))
         self.password_var.set(s.get("password", self.password_var.get()))
-        self.remote_path_var.set(s.get("remote_path", self.remote_path_var.get()))
+        remote_path = s.get("remote_path", self.remote_path_var.get())
+        # 設定檔的 remote_path 可以是路徑陣列，GUI 以「; 」分隔顯示在同一欄位。
+        if isinstance(remote_path, list):
+            remote_path = "; ".join(remote_path)
+        self.remote_path_var.set(remote_path)
         self.local_path_var.set(s.get("local_path", self.local_path_var.get()))
         self.auto_reconnect_var.set(bool(s.get("auto_reconnect", self.auto_reconnect_var.get())))
         self.resume_var.set(bool(s.get("resume", self.resume_var.get())))
@@ -268,13 +277,25 @@ class SFTPDownloaderGUI:
         )
         if not chosen:
             return
+        try:
+            settings = load_settings(Path(chosen))
+        except PlaceholderError as e:
+            messagebox.showerror("設定檔載入失敗", str(e))
+            return
         self.settings_path = Path(chosen)
-        self.settings = load_settings(self.settings_path)
+        self.settings = settings
         self._apply_settings_to_fields()
         self._toggle_log_dir()
         self._toggle_duplicate_suffix()
         self._update_title()
         self.status_var.set(f"已載入設定檔：{self.settings_path.name}")
+
+    def _parse_remote_paths(self):
+        """把來源路徑欄位解析成單一字串或路徑陣列（多個路徑以 ; 分隔）。"""
+        paths = [p.strip() for p in self.remote_path_var.get().split(";") if p.strip()]
+        if not paths:
+            return ""
+        return paths[0] if len(paths) == 1 else paths
 
     def _collect_fields(self):
         """收集目前畫面上所有欄位的值（鍵名同 settings.json 的欄位）。"""
@@ -288,7 +309,7 @@ class SFTPDownloaderGUI:
             "device_name": self.device_name_var.get().strip(),
             "username": self.username_var.get().strip(),
             "password": self.password_var.get(),
-            "remote_path": self.remote_path_var.get().strip(),
+            "remote_path": self._parse_remote_paths(),
             "local_path": self.local_path_var.get().strip(),
             "auto_reconnect": self.auto_reconnect_var.get(),
             "resume": self.resume_var.get(),
@@ -347,7 +368,7 @@ class SFTPDownloaderGUI:
         host = self.host_var.get().strip()
         device_name = self.device_name_var.get().strip()
         username = self.username_var.get().strip()
-        remote_path = self.remote_path_var.get().strip()
+        remote_path = self._parse_remote_paths()
         local_path = self.local_path_var.get().strip()
 
         if not host or not device_name or not username or not remote_path or not local_path:
