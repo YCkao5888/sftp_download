@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 更新 radar
+# 更新 scheduler
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
-config="$SCRIPT_DIR/../config/radar_download_settings.json"
+config="$SCRIPT_DIR/../config/scheduler_download_settings.json"
 
 if [[ ! -f "$config" ]]; then
     echo "找不到設定檔: $config" >&2
