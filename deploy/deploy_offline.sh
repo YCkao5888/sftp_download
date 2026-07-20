@@ -20,8 +20,11 @@
 #   ./deploy_offline.sh --python /usr/bin/python3.10 # 指定建立 venv 用的直譯器
 #
 # 特性：
-#   * 全程 --no-index，永不連外網（建立 venv 也用 ensurepip，離線可行）。
-#   * venv 與系統 site-packages 隔離（include-system-site-packages = false）。
+#   * 全程 --no-index，永不連外網。
+#   * 以 python3.10 -m virtualenv 建立 venv（與 radar / SHM 一致），不再依賴系統的
+#     python3-venv / ensurepip；若 python3.10 尚無 virtualenv，會用隨附的
+#     install_virtualenv_offline.sh + virtualenv_wheels/ 先離線補齊。
+#   * venv 與系統 site-packages 隔離。
 #   * 安裝前以 MANIFEST.txt 校驗 wheel sha256（可用 --skip-verify 跳過）。
 #   * 安裝後在 venv 內驗證關鍵套件可正常匯入。
 # ---------------------------------------------------------------------------
@@ -31,10 +34,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WHEELHOUSE="${SCRIPT_DIR}/wheelhouse"
 MANIFEST="${SCRIPT_DIR}/MANIFEST.txt"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SHARE_DIR="$(dirname "$PROJECT_DIR")"
+# 船舶基本資訊檔：供各設定檔的 {vsl_name}/{ipc} 佔位符替換使用（見 settings.py）。
+VESSEL_INFO="${SHARE_DIR}/.env/vessel_basic_info.json"
 
 DEFAULT_VENV="${HOME}/venv/wanhai_nssms/share/sftp_download"
 VENV_DIR="${DEFAULT_VENV}"
-PYTHON_BIN="python3"
+PYTHON_BIN=""          # 空字串＝自動偵測（優先 python3.10，與下游 install_env.sh 一致）
 WITH_TESTS=0
 CHECK_ONLY=0
 SKIP_VERIFY=0
@@ -70,6 +76,16 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# 未指定 --python 時自動選直譯器：優先 python3.10（下游 install_env.sh 與 wheelhouse
+# 的 cp310 wheel 皆以此為準），退而求其次才用 python3。
+if [ -z "$PYTHON_BIN" ]; then
+  if command -v python3.10 >/dev/null 2>&1; then
+    PYTHON_BIN="python3.10"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
+
 echo "==========================================================="
 echo " sftp_download 離線部署 (offline deploy — 專屬 venv)"
 echo "==========================================================="
@@ -85,6 +101,111 @@ info "系統架構      : $(uname -m) ($(uname -s) $(uname -r))"
 info "Wheelhouse    : $WHEELHOUSE"
 info "專案目錄      : $PROJECT_DIR"
 info "專屬 venv     : $VENV_DIR"
+info "船舶資訊檔    : $VESSEL_INFO"
+
+# --- 船舶基本資訊檔（vessel_basic_info.json）檢查 / 互動建立 ----------------
+# 剛啟動就先確認它存在且內容正確（需含非空的 vsl_name / ipc）；
+# 缺少或內容不正確時，以互動問答讓使用者輸入並建立該檔。
+vessel_info_show() {  # 印出現有內容；有效回傳 0、檔案不存在回傳 3、內容不正確回傳 2
+  "$PYTHON_BIN" - "$VESSEL_INFO" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as f:
+        info = json.load(f)
+except FileNotFoundError:
+    sys.exit(3)
+except Exception as e:  # noqa
+    print(f"內容無法解析：{e}")
+    sys.exit(2)
+if not isinstance(info, dict):
+    print("內容不是 JSON 物件")
+    sys.exit(2)
+for k, v in info.items():
+    print(f"{k} = {v}")
+missing = [k for k in ("vsl_name", "ipc") if not str(info.get(k, "")).strip()]
+if missing:
+    print("缺少或為空的必要欄位：" + ", ".join(missing))
+    sys.exit(2)
+sys.exit(0)
+PY
+}
+
+vessel_get() {  # $1=key → 印出現有值（去頭尾空白），讀取失敗則印空字串
+  "$PYTHON_BIN" - "$VESSEL_INFO" "$1" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    info = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(str(info.get(sys.argv[2], "")).strip())
+except Exception:
+    print("")
+PY
+}
+
+prompt_field() {  # $1=提示文字 $2=key → 結果放進 REPLY_VAL（不可為空，有舊值則當預設）
+  local cur val
+  cur="$(vessel_get "$2")"
+  while true; do
+    if [ -n "$cur" ]; then
+      read -r -p "  $1 [$cur]: " val || val=""
+      val="${val:-$cur}"
+    else
+      read -r -p "  $1: " val || val=""
+    fi
+    val="$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -n "$val" ]; then REPLY_VAL="$val"; return 0; fi
+    warn "  不可為空，請重新輸入。"
+  done
+}
+
+create_vessel_info() {
+  if [ ! -t 0 ]; then
+    err "非互動終端機，無法以問答建立船舶資訊檔。"
+    err "請手動建立 $VESSEL_INFO ，內容範例：{\"vsl_name\": \"WH289\", \"ipc\": \"IPC-1\"}"
+    exit 1
+  fi
+  local vsl ipc ans
+  while true; do
+    echo ""
+    info "請輸入船舶基本資訊："
+    prompt_field "船名 vsl_name（例：WH289）" "vsl_name"; vsl="$REPLY_VAL"
+    prompt_field "IPC 代號 ipc（例：IPC-1）"  "ipc";      ipc="$REPLY_VAL"
+    echo ""
+    echo "  即將寫入 $VESSEL_INFO ："
+    echo "    vsl_name = $vsl"
+    echo "    ipc      = $ipc"
+    read -r -p "  確認無誤？[Y/n] " ans || ans=""
+    case "$ans" in
+      ""|Y|y) break ;;
+      *) warn "重新輸入。" ;;
+    esac
+  done
+  mkdir -p "$(dirname "$VESSEL_INFO")"
+  VSL_NAME="$vsl" IPC="$ipc" "$PYTHON_BIN" - "$VESSEL_INFO" <<'PY'
+import json, os, sys
+data = {"vsl_name": os.environ["VSL_NAME"], "ipc": os.environ["IPC"]}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+  ok "已建立/更新船舶基本資訊檔：$VESSEL_INFO"
+}
+
+echo ""
+info "檢查船舶基本資訊檔 ..."
+set +e
+VESSEL_OUT="$(vessel_info_show)"; VESSEL_RC=$?
+set -e
+[ -n "$VESSEL_OUT" ] && printf '%s\n' "$VESSEL_OUT" | sed 's/^/       /'
+if [ "$VESSEL_RC" -eq 0 ]; then
+  ok "船舶基本資訊檔有效，沿用現有內容。"
+elif [ "$VESSEL_RC" -eq 3 ]; then
+  warn "找不到船舶基本資訊檔，將以互動問答建立。"
+  create_vessel_info
+else
+  warn "船舶基本資訊檔內容不正確，將重新建立。"
+  create_vessel_info
+fi
 
 if [ ! -d "$WHEELHOUSE" ]; then
   err "wheelhouse 目錄不存在：$WHEELHOUSE"; exit 1
@@ -95,9 +216,28 @@ if [ "$WHL_COUNT" -eq 0 ]; then
 fi
 ok "找到 $WHL_COUNT 個 wheel 檔案"
 
-# 建立 venv 需要 venv + ensurepip 模組（離線 bootstrap pip）
-if ! "$PYTHON_BIN" -c 'import venv, ensurepip' >/dev/null 2>&1; then
-  err "此 Python 缺少 venv/ensurepip 模組，無法離線建立 venv。請先安裝 python3-venv。"; exit 1
+# 建立 venv 改用 python3.10 -m virtualenv（與 radar / SHM 一致，不再依賴系統
+# python3-venv / ensurepip）。若目標直譯器尚未安裝 virtualenv，先以隨附的離線
+# 安裝腳本補齊（install_virtualenv_offline.sh + virtualenv_wheels/）。
+VENV_INSTALLER="${SCRIPT_DIR}/install_virtualenv_offline.sh"
+if "$PYTHON_BIN" -m virtualenv --version >/dev/null 2>&1; then
+  ok "virtualenv 可用：$("$PYTHON_BIN" -m virtualenv --version 2>&1 | awk '{print $2}')"
+elif [ "$CHECK_ONLY" -eq 1 ]; then
+  # --check-only 只驗證、不安裝；僅回報缺 virtualenv，實際部署時才會離線補齊。
+  warn "$PYTHON_BIN 尚未安裝 virtualenv（--check-only 不進行安裝）。"
+  warn "實際部署時將以 $VENV_INSTALLER 離線補齊。"
+else
+  warn "$PYTHON_BIN 尚未安裝 virtualenv，將以隨附腳本離線安裝 ..."
+  if [ ! -f "$VENV_INSTALLER" ]; then
+    err "找不到離線安裝腳本：$VENV_INSTALLER"; exit 1
+  fi
+  bash "$VENV_INSTALLER"
+  if ! "$PYTHON_BIN" -m virtualenv --version >/dev/null 2>&1; then
+    err "virtualenv 離線安裝後，$PYTHON_BIN 仍無法使用（可能裝到了其他解譯器）。"
+    err "請確認 $PYTHON_BIN 與 install_virtualenv_offline.sh 選用的解譯器一致。"
+    exit 1
+  fi
+  ok "virtualenv 離線安裝完成並可用：$("$PYTHON_BIN" -m virtualenv --version 2>&1 | awk '{print $2}')"
 fi
 
 # --- 校驗 wheel 完整性 ------------------------------------------------------
@@ -127,9 +267,9 @@ fi
 if [ -x "$VENV_PY" ]; then
   ok "沿用既有 venv：$VENV_DIR"
 else
-  info "建立專屬 venv（離線，含 pip）..."
+  info "建立專屬 venv（$PYTHON_BIN -m virtualenv，離線，含 pip）..."
   mkdir -p "$(dirname "$VENV_DIR")"
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m virtualenv "$VENV_DIR"
   if [ ! -x "$VENV_PY" ]; then
     err "venv 建立失敗：找不到 $VENV_PY"; exit 1
   fi
