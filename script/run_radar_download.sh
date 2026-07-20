@@ -4,6 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
+
+# 切換到專案根目錄，讓設定檔中的相對路徑（如 ignore_file: config/xxx_ignore.txt）
+# 無論從哪個目錄或排程 (cron) 執行都能正確解析。
+cd "$BASE_DIR"
+
 config="$SCRIPT_DIR/../config/radar_download_settings.json"
 
 if [[ ! -f "$config" ]]; then
