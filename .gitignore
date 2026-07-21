@@ -25,3 +25,4 @@ htmlcov/
 *.log
 config
 *.whl
+.sftp_upload_manifest.json
