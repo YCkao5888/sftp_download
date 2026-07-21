@@ -17,11 +17,11 @@ if [[ ! -f "$config" ]]; then
     exit 1
 fi
 
-# 使用 sftp_download 專屬 venv 的 Python 啟動（離線部署由 deploy/deploy_offline.sh 建立）
-VENV_PY="${SFTP_DOWNLOAD_VENV:-$HOME/venv/wanhai_nssms/share/sftp_download}/bin/python"
+# 使用 sftp_transfer 專屬 venv 的 Python 啟動（離線部署由 deploy/deploy_offline.sh 建立）
+VENV_PY="${SFTP_TRANSFER_VENV:-$HOME/venv/wanhai_nssms/share/sftp_transfer}/bin/python"
 
 if [[ ! -x "$VENV_PY" ]]; then
-    echo "找不到 sftp_download 專屬 venv 的 Python: $VENV_PY" >&2
+    echo "找不到 sftp_transfer 專屬 venv 的 Python: $VENV_PY" >&2
     echo "請先執行 deploy/deploy_offline.sh 建立 venv。" >&2
     exit 1
 fi

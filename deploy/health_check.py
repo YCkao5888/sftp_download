@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""health_check.py — sftp_download 安裝後能力測試 + SFTP 連線測試 + 健康報告。
+"""health_check.py — sftp_transfer 安裝後能力測試 + SFTP 連線測試 + 健康報告。
 
 在離線部署 (deploy_offline.sh) 完成後執行，會依序進行：
   1. 環境資訊蒐集 (Python / 平台 / glibc)
@@ -296,7 +296,7 @@ def write_report(env: dict, config_path: Path, overall: str) -> Path:
             counts[status] += 1
 
     lines = []
-    lines.append(f"# sftp_download 健康報告 (Health Report)")
+    lines.append(f"# sftp_transfer 健康報告 (Health Report)")
     lines.append("")
     lines.append(f"- **產生時間**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"- **主機名稱**：{env.get('hostname')}")
@@ -337,14 +337,14 @@ def write_report(env: dict, config_path: Path, overall: str) -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="sftp_download 能力測試 + SFTP 連線 + 健康報告")
+    ap = argparse.ArgumentParser(description="sftp_transfer 能力測試 + SFTP 連線 + 健康報告")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG), help="SFTP 設定檔路徑")
     ap.add_argument("--skip-tests", action="store_true", help="略過 pytest 單元測試")
     ap.add_argument("--skip-sftp", action="store_true", help="略過 SFTP 連線測試")
     args = ap.parse_args()
 
     print(BOLD("==========================================================="))
-    print(BOLD(" sftp_download 安裝後健康檢查 (health check)"))
+    print(BOLD(" sftp_transfer 安裝後健康檢查 (health check)"))
     print(BOLD("==========================================================="))
 
     env = collect_environment()

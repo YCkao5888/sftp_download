@@ -9,10 +9,10 @@ BASE_DIR="$(dirname "$SCRIPT_DIR")"
 # 無論從哪個目錄或排程 (cron) 執行都能正確解析（子行程會繼承此 CWD）。
 cd "$BASE_DIR"
 
-# sftp_download 專屬 venv 的 Python（離線部署由 deploy/deploy_offline.sh 建立）
-VENV_PY="${SFTP_DOWNLOAD_VENV:-$HOME/venv/wanhai_nssms/share/sftp_download}/bin/python"
+# sftp_transfer 專屬 venv 的 Python（離線部署由 deploy/deploy_offline.sh 建立）
+VENV_PY="${SFTP_TRANSFER_VENV:-$HOME/venv/wanhai_nssms/share/sftp_transfer}/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
-    echo "找不到 sftp_download 專屬 venv 的 Python: $VENV_PY" >&2
+    echo "找不到 sftp_transfer 專屬 venv 的 Python: $VENV_PY" >&2
     echo "請先執行 deploy/deploy_offline.sh 建立 venv。" >&2
     exit 1
 fi
