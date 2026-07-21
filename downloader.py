@@ -1,4 +1,8 @@
-"""SFTP 下載核心邏輯：連線、斷線重連、斷點續傳、Log 紀錄與回傳。"""
+"""SFTP 傳輸核心邏輯：連線、斷線重連、斷點續傳、Log 紀錄與回傳。
+
+`SFTPBase` 收攏方向無關的共用邏輯（連線/重試/網路偵測/關閉/ignore/manifest/遠端建目錄/Log 上傳），
+`SFTPDownloader`（下載，remote→local）與 `uploader.SFTPUploader`（上傳，local→remote）皆繼承之。
+"""
 
 import csv
 import hashlib
@@ -65,7 +69,7 @@ class _CSVFileHandler(logging.Handler):
 
 def create_logger(log_dir, device_name, version_info="", log_callback=None):
     """device_name 用於標示這份 Log 屬於哪一台設備/使用者（多台 edge device 共用同一 SFTP 帳號時仍可分辨）。
-    version_info 為選填的上傳版號資訊，會一併記錄在 Log 中，不影響任何下載邏輯。"""
+    version_info 為選填的上傳版號資訊，會一併記錄在 Log 中，不影響任何傳輸邏輯。"""
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     safe_device_name = _FILENAME_UNSAFE.sub("_", device_name).strip() or "unknown"
@@ -100,7 +104,15 @@ def create_logger(log_dir, device_name, version_info="", log_callback=None):
     return logger, log_file
 
 
-class SFTPDownloader:
+class SFTPBase:
+    """下載與上傳共用的基底：連線、斷線重連、網路偵測、ignore 規則、版本紀錄檔（manifest）、
+    本地端內容雜湊、遠端建目錄與 Log 上傳等方向無關的邏輯。
+
+    子類別以 `manifest_filename` 類別屬性指定各自的版本紀錄檔名，避免同一目錄同時被下載與上傳
+    使用時互相覆蓋。"""
+
+    manifest_filename = MANIFEST_FILENAME
+
     def __init__(
         self,
         host,
@@ -127,17 +139,18 @@ class SFTPDownloader:
         self.host = host
         self.port = port
         self.username = username
-        # 單一字串或路徑陣列皆可：陣列時各來源路徑的內容會合併下載到同一個 local_path，
-        # 適合把「標準路徑 + 各船專屬路徑」合併成一個完整專案。
+        # 下載時為來源、上傳時為目的地。下載可傳入單一字串或路徑陣列（陣列時各來源合併到同一個
+        # local_path，適合把「標準路徑 + 各船專屬路徑」合併成一個完整專案）；上傳僅使用單一目的地路徑。
         self.remote_path = remote_path
+        # 下載時為儲存目的地、上傳時為來源。
         self.local_path = local_path
         self.password = password
         self.key_file = key_file
         self.auto_reconnect = auto_reconnect
         self.resume = resume
         self.wait_for_network = wait_for_network
-        self.recursive = recursive  # True：下載所有子資料夾（多層）；False：只下載該路徑下的檔案（單層）
-        self.ignore_file = ignore_file  # 下載忽略設定檔路徑（格式同 .gitignore），None 或檔案不存在代表無需忽略
+        self.recursive = recursive  # True：處理所有子資料夾（多層）；False：只處理該路徑下的檔案（單層）
+        self.ignore_file = ignore_file  # 忽略設定檔路徑（格式同 .gitignore），None 或檔案不存在代表無需忽略
         self.retry_count = retry_count  # None 或 <= 0 代表無限次重試
         self.retry_delay = retry_delay
         self.upload_log = upload_log
@@ -219,20 +232,20 @@ class SFTPDownloader:
             pass
 
     def _load_ignore_spec(self):
-        """讀取「下載忽略設定檔」（格式同 .gitignore）。未設定或檔案不存在代表無需忽略；
+        """讀取「忽略設定檔」（格式同 .gitignore）。未設定或檔案不存在代表無需忽略；
         格式錯誤的規則逐行略過並記錄警告，其餘正確的規則仍照常生效。"""
         if not self.ignore_file:
             return None
         path = Path(self.ignore_file)
         if not path.exists():
-            self.logger.info(f"下載忽略設定檔不存在，不忽略任何檔案: {path}")
+            self.logger.info(f"忽略設定檔不存在，不忽略任何檔案: {path}")
             return None
         try:
             # utf-8-sig：Windows 記事本以 UTF-8 存檔時常會加上 BOM，若不去除，
             # BOM 會黏在第一行規則前面，導致第一條規則永遠比對不到。
             lines = path.read_text(encoding="utf-8-sig").splitlines()
         except (OSError, UnicodeDecodeError) as e:
-            self.logger.warning(f"下載忽略設定檔讀取失敗，不忽略任何檔案: {e}")
+            self.logger.warning(f"忽略設定檔讀取失敗，不忽略任何檔案: {e}")
             return None
         valid_lines = []
         for lineno, line in enumerate(lines, 1):
@@ -240,13 +253,81 @@ class SFTPDownloader:
                 GitIgnoreSpec.from_lines([line])
                 valid_lines.append(line)
             except ValueError:
-                self.logger.warning(f"下載忽略設定檔第 {lineno} 行格式錯誤，已略過此規則: {line!r}")
-        self.logger.info(f"已載入下載忽略設定檔: {path}")
+                self.logger.warning(f"忽略設定檔第 {lineno} 行格式錯誤，已略過此規則: {line!r}")
+        self.logger.info(f"已載入忽略設定檔: {path}")
         return GitIgnoreSpec.from_lines(valid_lines)
 
     def _is_ignored(self, rel_path):
-        """rel_path 為相對於下載根目錄的路徑；資料夾請加上結尾的 /（gitignore 的資料夾規則才會匹配）。"""
+        """rel_path 為相對於傳輸根目錄的路徑；資料夾請加上結尾的 /（gitignore 的資料夾規則才會匹配）。"""
         return self._ignore_spec is not None and self._ignore_spec.match_file(rel_path)
+
+    def _manifest_path(self, local_root):
+        return local_root / self.manifest_filename
+
+    def _load_manifest(self, local_root):
+        path = self._manifest_path(local_root)
+        if not path.exists():
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            self.logger.warning(f"版本紀錄檔讀取失敗，將視為未追蹤過任何檔案: {e}")
+            return {}
+
+    def _save_manifest(self, local_root):
+        try:
+            with open(self._manifest_path(local_root), "w", encoding="utf-8") as f:
+                json.dump(self._manifest, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            self.logger.warning(f"版本紀錄檔寫入失敗: {e}")
+
+    def _hash_local_file(self, local_file):
+        """計算本地端檔案目前內容的 SHA-256（只讀本機磁碟，不牽涉網路），
+        回傳 hashlib 雜湊物件，方便驗證後可直接沿用繼續累加後續新傳輸的內容。"""
+        local_hash = hashlib.sha256()
+        with open(local_file, "rb") as local_f:
+            while True:
+                chunk = local_f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                local_hash.update(chunk)
+        return local_hash
+
+    def _ensure_remote_dir(self, remote_dir):
+        """從根目錄逐層確認/建立遠端目錄（等同 mkdir -p），已存在的層級略過。
+
+        佔位符展開後的每船/每機目錄（如 /fleet/.../WH289/IPC-1/sftp_logs）
+        伺服器上通常尚未存在，直接 put 會失敗。"""
+        parts = [p for p in remote_dir.split("/") if p]
+        current = "/" if remote_dir.startswith("/") else ""
+        for part in parts:
+            current = current.rstrip("/") + "/" + part if current else part
+            try:
+                self.sftp.stat(current)
+            except FileNotFoundError:
+                self.sftp.mkdir(current)
+
+    def _upload_log_file(self):
+        try:
+            self.logger.info("正在上傳 Log 檔至 SFTP...")
+            for handler in self.logger.handlers:
+                handler.flush()
+            self._connect_with_retry()
+            self._ensure_remote_dir(self.remote_log_dir)
+            remote_name = self.remote_log_dir.rstrip("/") + "/" + Path(self.log_file).name
+            self.sftp.put(str(self.log_file), remote_name)
+            self.logger.info(f"Log 上傳完成: {remote_name}")
+        except Exception as e:
+            self.logger.error(f"Log 上傳失敗: {e}")
+        finally:
+            self._close()
+
+
+class SFTPDownloader(SFTPBase):
+    """SFTP 下載（remote → local）：遞迴走訪遠端目錄、斷點續傳、忽略規則與版本紀錄。"""
+
+    manifest_filename = MANIFEST_FILENAME
 
     def _list_remote_files(self, remote_root, local_root):
         files = []
@@ -292,27 +373,6 @@ class SFTPDownloader:
             else:
                 files.append((remote_path, rel_path))
 
-    def _manifest_path(self, local_root):
-        return local_root / MANIFEST_FILENAME
-
-    def _load_manifest(self, local_root):
-        path = self._manifest_path(local_root)
-        if not path.exists():
-            return {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            self.logger.warning(f"版本紀錄檔讀取失敗，將視為未追蹤過任何檔案: {e}")
-            return {}
-
-    def _save_manifest(self, local_root):
-        try:
-            with open(self._manifest_path(local_root), "w", encoding="utf-8") as f:
-                json.dump(self._manifest, f, ensure_ascii=False, indent=2)
-        except OSError as e:
-            self.logger.warning(f"版本紀錄檔寫入失敗: {e}")
-
     def _next_duplicate_path(self, local_file):
         candidate = local_file.with_name(f"{local_file.stem}_{self.duplicate_suffix}{local_file.suffix}")
         n = 1
@@ -320,18 +380,6 @@ class SFTPDownloader:
             candidate = local_file.with_name(f"{local_file.stem}_{self.duplicate_suffix}{n}{local_file.suffix}")
             n += 1
         return candidate
-
-    def _hash_local_file(self, local_file):
-        """計算本地端檔案目前內容的 SHA-256（只讀本機磁碟，不牽涉網路），
-        回傳 hashlib 雜湊物件，方便驗證後可直接沿用繼續累加後續新下載的內容。"""
-        local_hash = hashlib.sha256()
-        with open(local_file, "rb") as local_f:
-            while True:
-                chunk = local_f.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                local_hash.update(chunk)
-        return local_hash
 
     def _download_one_file(self, remote_file, rel_path, local_root):
         local_file = local_root / Path(*rel_path.split("/"))
@@ -454,34 +502,6 @@ class SFTPDownloader:
 
         self.logger.info(f"完成下載: {target_file.name if target_file != local_file else rel_path}")
         return "downloaded"
-
-    def _ensure_remote_dir(self, remote_dir):
-        """從根目錄逐層確認/建立遠端目錄（等同 mkdir -p），已存在的層級略過。
-        佔位符展開後的每船/每機 Log 目錄（如 /fleet/.../WH289/IPC-1/sftp_logs）
-        伺服器上通常尚未存在，直接 put 會失敗。"""
-        parts = [p for p in remote_dir.split("/") if p]
-        current = "/" if remote_dir.startswith("/") else ""
-        for part in parts:
-            current = current.rstrip("/") + "/" + part if current else part
-            try:
-                self.sftp.stat(current)
-            except FileNotFoundError:
-                self.sftp.mkdir(current)
-
-    def _upload_log_file(self):
-        try:
-            self.logger.info("正在上傳 Log 檔至 SFTP...")
-            for handler in self.logger.handlers:
-                handler.flush()
-            self._connect_with_retry()
-            self._ensure_remote_dir(self.remote_log_dir)
-            remote_name = self.remote_log_dir.rstrip("/") + "/" + Path(self.log_file).name
-            self.sftp.put(str(self.log_file), remote_name)
-            self.logger.info(f"Log 上傳完成: {remote_name}")
-        except Exception as e:
-            self.logger.error(f"Log 上傳失敗: {e}")
-        finally:
-            self._close()
 
     def run(self):
         self.logger.info("=== SFTP 下載任務開始 ===")

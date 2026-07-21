@@ -14,6 +14,7 @@ from pathlib import Path
 
 from downloader import SFTPDownloader, create_logger
 from settings import PlaceholderError, load_settings
+from uploader import SFTPUploader
 
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 
@@ -29,6 +30,12 @@ def build_parser():
         "--config",
         help="指定要讀取的設定檔路徑（預設為工具資料夾內的 settings.json）。"
         "適合同一台裝置需要下載多組不同的 SFTP 來源/本地路徑時，每組各自用一份設定檔、各排一個排程任務",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["download", "upload"],
+        help="傳輸方向：download=遠端→本地（預設）、upload=本地→遠端。"
+        "upload 模式下 --local-path 為來源、--remote-path 為目的地",
     )
     parser.add_argument("--host", help="SFTP 主機位址")
     parser.add_argument("--port", type=int, help="SFTP 連接埠（預設 22）")
@@ -46,9 +53,10 @@ def build_parser():
     parser.add_argument(
         "--remote-path",
         action="append",
-        help="SFTP 來源路徑（檔案或目錄）。可重複指定多次，多個來源會合併下載到同一個本地端儲存路徑",
+        help="SFTP 路徑（檔案或目錄）。download 模式為來源，可重複指定多次、多個來源會合併下載到同一個本地端"
+        "路徑；upload 模式為目的地，僅使用單一路徑（重複指定時取第一個）",
     )
-    parser.add_argument("--local-path", help="本地端儲存路徑")
+    parser.add_argument("--local-path", help="本地端路徑：download 模式為儲存目的地、upload 模式為上傳來源")
     parser.add_argument(
         "--ignore-file",
         help="下載忽略設定檔路徑，內容格式完全同 .gitignore，符合規則的檔案/資料夾不會被下載；"
@@ -94,6 +102,7 @@ def run_cli(args):
         print(f"錯誤：{e}", file=sys.stderr)
         return 1
 
+    mode = args.mode or settings.get("mode") or "download"
     host = _resolve(args.host, settings, "host")
     port = _resolve(args.port, settings, "port", 22)
     device_name = _resolve(args.device_name, settings, "device_name")
@@ -141,7 +150,8 @@ def run_cli(args):
         password = getpass.getpass(f"請輸入 {username}@{host} 的密碼: ")
 
     logger, log_file = create_logger(log_dir, device_name, version_info)
-    downloader = SFTPDownloader(
+    transfer_cls = SFTPUploader if mode == "upload" else SFTPDownloader
+    transfer = transfer_cls(
         host=host,
         port=port,
         username=username,
@@ -163,7 +173,7 @@ def run_cli(args):
         logger=logger,
         log_file=log_file,
     )
-    success = downloader.run()
+    success = transfer.run()
     return 0 if success else 1
 
 

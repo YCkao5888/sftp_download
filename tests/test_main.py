@@ -15,7 +15,7 @@ import main as main_module
 def make_args(**overrides):
     """建立一份預設全為「未指定」的 argparse.Namespace，測試時只覆寫需要的欄位。"""
     defaults = dict(
-        cli=True, config=None, host=None, port=None, username=None, device_name=None,
+        cli=True, config=None, mode=None, host=None, port=None, username=None, device_name=None,
         version_info=None, password=None, key_file=None, remote_path=None, local_path=None,
         ignore_file=None, no_auto_reconnect=False, no_resume=False, no_wait_network=False, no_recursive=False,
         retry_count=None, retry_delay=None, upload_log=False, log_remote_dir=None, log_dir=None,
@@ -347,11 +347,76 @@ class TestRunCliPasswordResolution:
         assert captured["kwargs"]["key_file"] == "/home/user/.ssh/id_rsa"
 
 
+class TestRunCliMode:
+    """--mode 分流：download 建構 SFTPDownloader、upload 建構 SFTPUploader。"""
+
+    def _fakes_and_logger(self, monkeypatch):
+        captured = {}
+
+        def make_fake(name):
+            class Fake:
+                def __init__(self, **kwargs):
+                    captured["cls"] = name
+                    captured["kwargs"] = kwargs
+
+                def run(self):
+                    return True
+
+            return Fake
+
+        monkeypatch.setattr(main_module, "SFTPDownloader", make_fake("download"))
+        monkeypatch.setattr(main_module, "SFTPUploader", make_fake("upload"))
+        monkeypatch.setattr(
+            main_module, "create_logger",
+            lambda log_dir, device_name, version_info="", log_callback=None: (MagicMock(), "fake.csv"),
+        )
+        return captured
+
+    def _write_settings(self, tmp_path, **overrides):
+        data = dict(
+            host="10.0.0.5", device_name="edge-1", username="svc", password="pw",
+            remote_path="/dest", local_path=str(tmp_path / "src"),
+        )
+        data.update(overrides)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_default_mode_builds_downloader(self, tmp_path, monkeypatch):
+        captured = self._fakes_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path)
+        main_module.run_cli(make_args(config=str(settings_path)))
+        assert captured["cls"] == "download"
+
+    def test_cli_mode_upload_builds_uploader(self, tmp_path, monkeypatch):
+        captured = self._fakes_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path)
+        main_module.run_cli(make_args(config=str(settings_path), mode="upload"))
+        assert captured["cls"] == "upload"
+
+    def test_settings_mode_upload_builds_uploader(self, tmp_path, monkeypatch):
+        captured = self._fakes_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path, mode="upload")
+        main_module.run_cli(make_args(config=str(settings_path)))
+        assert captured["cls"] == "upload"
+
+    def test_cli_mode_overrides_settings_mode(self, tmp_path, monkeypatch):
+        captured = self._fakes_and_logger(monkeypatch)
+        settings_path = self._write_settings(tmp_path, mode="upload")
+        main_module.run_cli(make_args(config=str(settings_path), mode="download"))
+        assert captured["cls"] == "download"
+
+
 class TestBuildParser:
     def test_duplicate_mode_rejects_invalid_choice(self, capsys):
         parser = main_module.build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["--duplicate-mode", "not-a-real-choice"])
+
+    def test_mode_rejects_invalid_choice(self, capsys):
+        parser = main_module.build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--mode", "sideways"])
 
     def test_cli_flag_alone_is_sufficient_to_avoid_argparse_errors(self):
         parser = main_module.build_parser()

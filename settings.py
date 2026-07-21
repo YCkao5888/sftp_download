@@ -21,6 +21,7 @@ class PlaceholderError(ValueError):
     """設定檔中的佔位符無法解析（vessel 資訊檔不存在、壞掉或缺少對應 key）。"""
 
 SETTINGS_TEMPLATE = {
+    "mode": "download",
     "host": "",
     "port": 22,
     "device_name": "",

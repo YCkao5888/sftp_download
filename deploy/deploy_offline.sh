@@ -207,6 +207,60 @@ else
   create_vessel_info
 fi
 
+# --- 開機自動執行設定（scheduler/install_autostart.sh） --------------------
+# 與船舶資訊檔一樣，是需要使用者留意的一次性設定：詢問是否設定開機自動啟動
+# （systemd user service + linger）。install_autostart.sh 具冪等性，可重複執行。
+#
+# 以 --require-linger 呼叫，讓 install_autostart.sh 用離開碼區分結果，deploy 才能
+# 「掌握」實際成功狀態(而非只知道有沒有崩)。deploy 端僅據以警告、不中斷部署。
+#   0 = 完全成功(service enabled + linger on)
+#   3 = user service 已裝，但 linger 未開啟(開機免登入自動執行需要它)
+#   4 = 設定失敗(找不到腳本 / 無法寫入 unit / user manager 不可用)
+#   2 = install_autostart.sh 參數錯誤
+# AUTOSTART_STATUS 供最後的部署總結顯示；先給預設值(set -u 下需先定義)。
+AUTOSTART_INSTALLER="${SHARE_DIR}/scheduler/install_autostart.sh"
+AUTOSTART_STATUS="未執行"
+echo ""
+info "檢查開機自動執行設定 ..."
+if [ ! -f "$AUTOSTART_INSTALLER" ]; then
+  warn "找不到 $AUTOSTART_INSTALLER ，略過開機自動執行設定。"
+  AUTOSTART_STATUS="略過（找不到安裝腳本）"
+elif [ ! -t 0 ]; then
+  # 非互動終端機：不擅自更動 systemd / linger，僅提示手動指令。
+  warn "非互動終端機，略過開機自動執行設定。"
+  warn "如需設定，請手動執行：bash $AUTOSTART_INSTALLER"
+  AUTOSTART_STATUS="略過（非互動終端機）"
+else
+  autostart_ans=""
+  read -r -p "  是否設定開機自動啟動 scheduler（reboot_tmux.sh）？[Y/n] " autostart_ans || autostart_ans=""
+  case "$autostart_ans" in
+    ""|Y|y)
+      # 捕捉離開碼判讀結果；install_autostart.sh 於非互動/無權限時不會中斷，
+      # 這裡即使回非 0 也只警告，不影響 sftp_download 的部署結果。
+      set +e
+      bash "$AUTOSTART_INSTALLER" --require-linger
+      AUTOSTART_RC=$?
+      set -e
+      case "$AUTOSTART_RC" in
+        0) ok   "開機自動執行：已設定並啟用（service enabled + linger on）"
+           AUTOSTART_STATUS="已啟用" ;;
+        3) warn "開機自動執行：user service 已安裝，但 linger 未開啟；請手動執行 sudo loginctl enable-linger $(id -un)"
+           AUTOSTART_STATUS="部分完成（linger 未開啟）" ;;
+        4) warn "開機自動執行：設定失敗（rc=4：找不到腳本 / 無法寫入 unit / user manager 不可用）"
+           AUTOSTART_STATUS="設定失敗（rc=4）" ;;
+        2) warn "開機自動執行：install_autostart.sh 參數錯誤（rc=2）"
+           AUTOSTART_STATUS="設定失敗（參數錯誤）" ;;
+        *) warn "開機自動執行：未預期的結果（rc=$AUTOSTART_RC），請檢視上方訊息"
+           AUTOSTART_STATUS="未知（rc=$AUTOSTART_RC）" ;;
+      esac
+      ;;
+    *)
+      info "略過開機自動執行設定。日後可執行：bash $AUTOSTART_INSTALLER"
+      AUTOSTART_STATUS="使用者略過"
+      ;;
+  esac
+fi
+
 if [ ! -d "$WHEELHOUSE" ]; then
   err "wheelhouse 目錄不存在：$WHEELHOUSE"; exit 1
 fi
@@ -347,6 +401,12 @@ if [ "$RUN_HEALTH" -eq 1 ]; then
 else
   info "已指定 --no-health-check，略過自動健康檢查。"
 fi
+
+echo ""
+echo "── 部署總結 ──"
+printf "  開機自動執行設定：%s\n" "$AUTOSTART_STATUS"
+[ "$RUN_HEALTH" -eq 1 ] && printf "  健康檢查：%s\n" \
+  "$( [ "$HEALTH_RC" -eq 0 ] && echo HEALTHY || echo "有問題（exit=$HEALTH_RC）" )"
 
 echo ""
 echo "啟用 venv："
