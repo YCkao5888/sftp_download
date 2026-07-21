@@ -1,4 +1,4 @@
-"""SFTP 下載工具的圖形化介面（不帶任何 CLI 參數執行時自動啟動）。"""
+"""SFTP 傳輸工具的圖形化介面（不帶任何 CLI 參數執行時自動啟動），支援下載與上傳兩種模式。"""
 
 import threading
 import tkinter as tk
@@ -6,9 +6,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from downloader import SFTPDownloader, create_logger
+from uploader import SFTPUploader
 from settings import (
     SETTINGS_PATH,
     SETTINGS_TEMPLATE,
+    PlaceholderError,
     ensure_settings_file,
     load_settings,
     open_in_default_app,
@@ -23,11 +25,16 @@ class SFTPDownloaderGUI:
         self.root = root
         self.downloader = None
         self.settings_path = SETTINGS_PATH
-        self.settings = load_settings(self.settings_path)
+        try:
+            self.settings = load_settings(self.settings_path)
+        except PlaceholderError as e:
+            messagebox.showerror("設定檔載入失敗", str(e))
+            self.settings = {}
         self._build_widgets()
         self._apply_settings_to_fields()
         self._toggle_log_dir()
         self._toggle_duplicate_suffix()
+        self._on_mode_change()
         self._update_title()
 
     def _build_widgets(self):
@@ -92,6 +99,15 @@ class SFTPDownloaderGUI:
         ttk.Button(settings_bar, text="開啟設定檔", command=self._open_settings_file).pack(side="left", padx=(6, 0))
         ttk.Button(settings_bar, text="匯出設定檔...", command=self._export_settings_file).pack(side="left", padx=(6, 0))
 
+        ttk.Label(settings_bar, text="模式：").pack(side="left", padx=(12, 0))
+        self.mode_var = tk.StringVar(value="download")
+        ttk.Radiobutton(
+            settings_bar, text="下載", value="download", variable=self.mode_var, command=self._on_mode_change
+        ).pack(side="left")
+        ttk.Radiobutton(
+            settings_bar, text="上傳", value="upload", variable=self.mode_var, command=self._on_mode_change
+        ).pack(side="left")
+
         steps = (
             "操作步驟：① 如已有設定檔，先按「載入設定檔」自動帶入欄位　"
             "② 填寫下方標示 * 的必填欄位　③ 依需求勾選進階選項　④ 按「開始下載」，下方會即時顯示進度"
@@ -129,21 +145,23 @@ class SFTPDownloaderGUI:
             foreground="#777777",
         ).grid(row=2, column=0, columnspan=4, sticky="w", padx=6)
 
-        # --- 下載路徑（必填） ---
-        path_frame = ttk.LabelFrame(outer, text="下載路徑", padding=8)
-        path_frame.grid(row=4, column=0, sticky="we", pady=(0, 8))
-        path_frame.columnconfigure(1, weight=1)
+        # --- 傳輸路徑（必填；標籤依模式變動） ---
+        self.path_frame = ttk.LabelFrame(outer, text="下載路徑", padding=8)
+        self.path_frame.grid(row=4, column=0, sticky="we", pady=(0, 8))
+        self.path_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(path_frame, text="SFTP 來源路徑 *").grid(row=0, column=0, sticky="w", **pad)
+        self.remote_path_label = ttk.Label(self.path_frame, text="SFTP 來源路徑 *\n（多個路徑以 ; 分隔）")
+        self.remote_path_label.grid(row=0, column=0, sticky="w", **pad)
         self.remote_path_var = tk.StringVar()
-        ttk.Entry(path_frame, textvariable=self.remote_path_var).grid(
+        ttk.Entry(self.path_frame, textvariable=self.remote_path_var).grid(
             row=0, column=1, columnspan=2, sticky="we", **pad
         )
 
-        ttk.Label(path_frame, text="本地端儲存路徑 *").grid(row=1, column=0, sticky="w", **pad)
+        self.local_path_label = ttk.Label(self.path_frame, text="本地端儲存路徑 *")
+        self.local_path_label.grid(row=1, column=0, sticky="w", **pad)
         self.local_path_var = tk.StringVar()
-        ttk.Entry(path_frame, textvariable=self.local_path_var).grid(row=1, column=1, sticky="we", **pad)
-        ttk.Button(path_frame, text="瀏覽...", command=self._browse_local_path).grid(row=1, column=2, **pad)
+        ttk.Entry(self.path_frame, textvariable=self.local_path_var).grid(row=1, column=1, sticky="we", **pad)
+        ttk.Button(self.path_frame, text="瀏覽...", command=self._browse_local_path).grid(row=1, column=2, **pad)
 
         # --- 進階選項（選填） ---
         adv_frame = ttk.LabelFrame(outer, text="進階選項（選填，預設皆已啟用）", padding=8)
@@ -171,7 +189,8 @@ class SFTPDownloaderGUI:
             adv_frame, text="單層（僅此層檔案）", value=False, variable=self.recursive_var,
         ).grid(row=1, column=2, sticky="w", **pad)
 
-        ttk.Label(adv_frame, text="來源檔案更新時：").grid(row=2, column=0, sticky="w", **pad)
+        self.duplicate_mode_label = ttk.Label(adv_frame, text="來源檔案更新時：")
+        self.duplicate_mode_label.grid(row=2, column=0, sticky="w", **pad)
         self.duplicate_mode_var = tk.StringVar(value="overwrite")
         ttk.Radiobutton(
             adv_frame, text="另存新檔", value="duplicate", variable=self.duplicate_mode_var,
@@ -234,16 +253,36 @@ class SFTPDownloaderGUI:
         state = "normal" if self.duplicate_mode_var.get() == "duplicate" else "disabled"
         self.duplicate_suffix_entry.config(state=state)
 
+    def _on_mode_change(self):
+        """依目前模式（下載/上傳）調整路徑欄位與按鈕文字，讓來源/目的地標示與方向一致。"""
+        if self.mode_var.get() == "upload":
+            self.path_frame.config(text="上傳路徑")
+            self.remote_path_label.config(text="SFTP 目的地路徑 *")
+            self.local_path_label.config(text="本地端來源路徑 *")
+            self.duplicate_mode_label.config(text="遠端已有同名檔時：")
+            self.start_button.config(text="開始上傳")
+        else:
+            self.path_frame.config(text="下載路徑")
+            self.remote_path_label.config(text="SFTP 來源路徑 *\n（多個路徑以 ; 分隔）")
+            self.local_path_label.config(text="本地端儲存路徑 *")
+            self.duplicate_mode_label.config(text="來源檔案更新時：")
+            self.start_button.config(text="開始下載")
+
     def _apply_settings_to_fields(self):
         s = self.settings
         if not s:
             return
+        self.mode_var.set(s.get("mode", self.mode_var.get()))
         self.host_var.set(s.get("host", self.host_var.get()))
         self.port_var.set(str(s.get("port", self.port_var.get())))
         self.device_name_var.set(s.get("device_name", self.device_name_var.get()))
         self.username_var.set(s.get("username", self.username_var.get()))
         self.password_var.set(s.get("password", self.password_var.get()))
-        self.remote_path_var.set(s.get("remote_path", self.remote_path_var.get()))
+        remote_path = s.get("remote_path", self.remote_path_var.get())
+        # 設定檔的 remote_path 可以是路徑陣列，GUI 以「; 」分隔顯示在同一欄位。
+        if isinstance(remote_path, list):
+            remote_path = "; ".join(remote_path)
+        self.remote_path_var.set(remote_path)
         self.local_path_var.set(s.get("local_path", self.local_path_var.get()))
         self.auto_reconnect_var.set(bool(s.get("auto_reconnect", self.auto_reconnect_var.get())))
         self.resume_var.set(bool(s.get("resume", self.resume_var.get())))
@@ -268,13 +307,26 @@ class SFTPDownloaderGUI:
         )
         if not chosen:
             return
+        try:
+            settings = load_settings(Path(chosen))
+        except PlaceholderError as e:
+            messagebox.showerror("設定檔載入失敗", str(e))
+            return
         self.settings_path = Path(chosen)
-        self.settings = load_settings(self.settings_path)
+        self.settings = settings
         self._apply_settings_to_fields()
         self._toggle_log_dir()
         self._toggle_duplicate_suffix()
+        self._on_mode_change()
         self._update_title()
         self.status_var.set(f"已載入設定檔：{self.settings_path.name}")
+
+    def _parse_remote_paths(self):
+        """把來源路徑欄位解析成單一字串或路徑陣列（多個路徑以 ; 分隔）。"""
+        paths = [p.strip() for p in self.remote_path_var.get().split(";") if p.strip()]
+        if not paths:
+            return ""
+        return paths[0] if len(paths) == 1 else paths
 
     def _collect_fields(self):
         """收集目前畫面上所有欄位的值（鍵名同 settings.json 的欄位）。"""
@@ -283,12 +335,13 @@ class SFTPDownloaderGUI:
         except ValueError:
             port = 22
         return {
+            "mode": self.mode_var.get(),
             "host": self.host_var.get().strip(),
             "port": port,
             "device_name": self.device_name_var.get().strip(),
             "username": self.username_var.get().strip(),
             "password": self.password_var.get(),
-            "remote_path": self.remote_path_var.get().strip(),
+            "remote_path": self._parse_remote_paths(),
             "local_path": self.local_path_var.get().strip(),
             "auto_reconnect": self.auto_reconnect_var.get(),
             "resume": self.resume_var.get(),
@@ -344,14 +397,16 @@ class SFTPDownloaderGUI:
         self.log_text.config(state="disabled")
 
     def _start_download(self):
+        is_upload = self.mode_var.get() == "upload"
         host = self.host_var.get().strip()
         device_name = self.device_name_var.get().strip()
         username = self.username_var.get().strip()
-        remote_path = self.remote_path_var.get().strip()
+        remote_path = self._parse_remote_paths()
         local_path = self.local_path_var.get().strip()
 
         if not host or not device_name or not username or not remote_path or not local_path:
-            messagebox.showerror("欄位不完整", "請填寫 SFTP 主機、裝置名稱、SFTP 帳號、SFTP 來源路徑與本地端儲存路徑")
+            path_hint = "SFTP 目的地路徑與本地端來源路徑" if is_upload else "SFTP 來源路徑與本地端儲存路徑"
+            messagebox.showerror("欄位不完整", f"請填寫 SFTP 主機、裝置名稱、SFTP 帳號、{path_hint}")
             return
         if self.upload_log_var.get() and not self.remote_log_dir_var.get().strip():
             messagebox.showerror("欄位不完整", "已勾選上傳 Log，請填寫 SFTP 上的 Log 目錄")
@@ -371,7 +426,8 @@ class SFTPDownloaderGUI:
         log_dir = self.settings.get("log_dir") or DEFAULT_LOG_DIR
         version_info = self.version_info_var.get().strip()
         logger, log_file = create_logger(log_dir, device_name, version_info, log_callback=self._append_log)
-        self.downloader = SFTPDownloader(
+        transfer_cls = SFTPUploader if is_upload else SFTPDownloader
+        self.downloader = transfer_cls(
             host=host,
             port=port,
             username=username,
@@ -394,6 +450,7 @@ class SFTPDownloaderGUI:
             log_file=log_file,
         )
 
+        self._active_is_upload = is_upload
         threading.Thread(target=self._run_download, daemon=True).start()
 
     def _run_download(self):
@@ -401,7 +458,8 @@ class SFTPDownloaderGUI:
         self.root.after(0, self._on_finished, success)
 
     def _on_finished(self, success):
-        self.status_var.set("下載完成" if success else "下載失敗，詳見 Log")
+        verb = "上傳" if getattr(self, "_active_is_upload", False) else "下載"
+        self.status_var.set(f"{verb}完成" if success else f"{verb}失敗，詳見 Log")
         self.start_button.config(state="normal")
 
 

@@ -24,3 +24,5 @@ htmlcov/
 # 測試產生的日誌 (視你的設定而定)
 *.log
 config
+*.whl
+.sftp_upload_manifest.json

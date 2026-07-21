@@ -2,15 +2,20 @@
 
 **語言選擇：Python**（跨平台支援 Windows/Linux 最成熟，`paramiko` 套件內建 SFTP 客戶端，`tkinter` 為 Python 內建 GUI 套件不需額外安裝，CLI 用標準庫 `argparse` 即可，最符合「同時支援 CLI 與 GUI、跨平台」的需求）。
 
+本工具同時支援**下載（remote → local，預設）**與**上傳（local → remote）**兩種方向，透過 `mode` 設定或 `--mode` 參數切換；上傳與下載共用同一套連線、斷線重連、斷點續傳、忽略規則與版本紀錄機制（詳見下方【上傳模式（local → remote）】）。
+
 檔案結構：
-- `main.py`：進入點。不帶參數 → 開啟 GUI；帶參數 → CLI 模式。
-- `downloader.py`：下載核心邏輯（連線、斷線重連、斷點續傳、Log）。
-- `gitignore.py`：「下載忽略設定檔」的 gitignore 規則比對（純 Python 標準庫實作，不需安裝額外套件）。
-- `gui.py`：圖形化介面。
+- `main.py`：進入點。不帶參數 → 開啟 GUI；帶參數 → CLI 模式。以 `--mode {download,upload}` 決定方向。
+- `downloader.py`：傳輸核心邏輯。`SFTPBase` 收攏連線/斷線重連/網路偵測/忽略規則/版本紀錄等方向無關邏輯；`SFTPDownloader` 為下載實作。
+- `uploader.py`：上傳核心邏輯（`SFTPUploader`，繼承 `SFTPBase`），與下載對稱：遞迴走訪本地目錄、斷點續傳、忽略規則與版本紀錄。
+- `gitignore.py`：「忽略設定檔」的 gitignore 規則比對（純 Python 標準庫實作，不需安裝額外套件）。
+- `gui.py`：圖形化介面（右上角可切換「下載／上傳」模式）。
 - `settings.py`：設定檔（`settings.json`）讀取/開啟工具，CLI 與 GUI 共用。
-- `example_settings.json`：設定檔範本，複製改名為 `settings.json` 後填入實際值即可使用。
-- `example_download_ignore.txt`：「下載忽略設定檔」範本，複製改名為 `download_ignore.txt` 後依需求增刪規則即可使用。
-- `tests/`：pytest 單元測試（`downloader.py`／`gitignore.py`／`settings.py`／`main.py`），詳見下方【開發：執行單元測試】。
+- `example_settings.json`：下載設定檔範本，複製改名為 `settings.json` 後填入實際值即可使用。
+- `example_upload_settings.json`：上傳設定檔範本（`mode` 為 `upload`）。
+- `run_all_downloads.py` / `run_all_uploads.py`：分別遍歷 `config/` 內 `*_download_settings.json` / `*_upload_settings.json` 並依序執行。
+- `example_download_ignore.txt`：「忽略設定檔」範本，複製改名後依需求增刪規則即可使用。
+- `tests/`：pytest 單元測試（`downloader.py`／`uploader.py`／`gitignore.py`／`settings.py`／`main.py`），詳見下方【開發：執行單元測試】。
 
 ---
 
@@ -124,6 +129,7 @@ cp example_settings.json settings.json
 
 | 欄位（settings.json） | 對應 CLI 參數 | 範例值 | 用途 |
 |---|---|---|---|
+| `mode` | `--mode` | `"download"` 或 `"upload"` | 傳輸方向：`download`（**預設**，遠端→本地）或 `upload`（本地→遠端）。upload 模式下 `local_path` 為來源、`remote_path` 為目的地，詳見下方【上傳模式（local → remote）】 |
 | `host` | `--host` | `"192.168.6.79"` | SFTP 伺服器位址或網域名稱（必填） |
 | `port` | `--port` | `22` | SFTP 連接埠，未填預設為 `22` |
 | `device_name` | `--device-name` | `"edge-101"` | 裝置/使用者識別名稱，會標示在 Log 內容與檔名中，方便日後彙整分辨來源（必填，建議每台裝置給唯一名稱） |
@@ -131,7 +137,7 @@ cp example_settings.json settings.json
 | `username` | `--username` | `"myuser"` | SFTP 登入帳號（必填） |
 | `password` | `--password` / 環境變數 `SFTP_PASSWORD` | `"your_password"` | SFTP 登入密碼。若改用 `key_file` 金鑰登入則留空字串 `""`；未提供時 CLI 會互動提示輸入 |
 | `key_file` | `--key-file` | `"C:\\Users\\me\\.ssh\\id_rsa"` 或 `""` | SSH 私鑰檔路徑，填寫後會取代密碼登入；不使用金鑰登入則留空字串 |
-| `remote_path` | `--remote-path` | `"/data/reports"` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄預設會含子目錄一併遞迴下載，可用 `recursive` 設定改為只下載當層）（必填）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
+| `remote_path` | `--remote-path`（可重複指定多次） | `"/data/reports"` 或 `["/data/std", "/data/{vsl_name}/proj"]` | SFTP 上要下載的來源路徑（單一檔案或整個目錄，目錄預設會含子目錄一併遞迴下載，可用 `recursive` 設定改為只下載當層）（必填）。**可填路徑陣列**，多個來源的內容會合併下載到同一個 `local_path`（詳見下方【多來源路徑合併】）。**這是伺服器端路徑，若 SFTP 伺服器是 Linux，請用 `/` 分隔的路徑，不要填本機的 Windows 路徑（如 `C:\...`）** |
 | `local_path` | `--local-path` | `"C:\\Users\\me\\Downloads"` | 下載後要存放的本機資料夾路徑（必填），可用本機作業系統慣用的路徑格式 |
 | `auto_reconnect` | `--no-auto-reconnect`（僅能停用） | `true` / `false` | 下載中斷線時是否自動重新連線並接續下載，未填預設 `true` |
 | `resume` | `--no-resume`（僅能停用） | `true` / `false` | 是否啟用斷點續傳（略過已完整下載的檔案、接續未下載完的部分），未填預設 `true` |
@@ -145,6 +151,90 @@ cp example_settings.json settings.json
 | `log_dir` | `--log-dir` | `""` 或 `"C:\\logs"` | 本機儲存 Log 檔（`.csv`）的資料夾，留空字串則使用預設的 `logs/` 資料夾 |
 | `duplicate_mode` | `--duplicate-mode` | `"overwrite"` 或 `"duplicate"` | 偵測到來源檔案已被更新時的處理方式：`overwrite`（**預設**，直接覆蓋舊檔案）或 `duplicate`（另存新檔、保留舊檔）；詳見下方【來源檔案更新時的版本處理】 |
 | `duplicate_suffix` | `--duplicate-suffix` | `"copy"` | `duplicate_mode` 為 `duplicate` 時，另存新檔用的檔名後綴，未填預設 `"copy"` |
+
+---
+
+## 【上傳模式（local → remote）】
+
+除了預設的下載，本工具也支援把本地端檔案/資料夾上傳到 SFTP 遠端。上傳與下載共用**同一套**連線、斷線重連、網路偵測、忽略規則、斷點續傳與版本紀錄機制；差別只在方向相反：
+
+- **`local_path` 為上傳來源**（單一檔案或整個資料夾），**`remote_path` 為遠端目的地**（單一路徑；上傳不支援多來源合併，若填路徑陣列只取第一個並記錄警告）。
+- `recursive`、`ignore_file`、`resume`、`duplicate_mode`、`duplicate_suffix`、`retry_*`、`auto_reconnect`、`wait_for_network` 等設定的意義與下載完全相同。
+- **遠端同名檔案處理**沿用 `duplicate_mode`：`overwrite`（**預設**，直接覆蓋遠端舊檔）或 `duplicate`（在遠端以 `_copy` 後綴另存新檔、保留舊檔）。
+- **跳過未變更**：以本地檔案的 size/mtime 搭配版本紀錄判斷，遠端已存在且未變更的檔案會略過不重傳。
+- **斷點續傳**：遠端檔案若比本地小且版本紀錄相符，會驗證本地前綴內容雜湊後從遠端已上傳的位置接續上傳（與下載對稱，驗證只讀本機磁碟、不回讀遠端內容）。
+- **版本紀錄檔**：上傳使用 `.sftp_upload_manifest.json`（存放在本地來源目錄），與下載的 `.sftp_download_manifest.json` 分開，同一目錄雙向使用不會互相覆蓋；走訪來源上傳時會自動排除這兩個 manifest 檔本身。
+
+### 使用方式
+
+CLI（排程最常用）：
+```bash
+# 直接以參數上傳
+python main.py --cli --mode upload --host 192.168.6.79 --username myuser \
+    --device-name edge-101 --local-path /home/user/to_upload --remote-path /data/upload_target
+
+# 或把 "mode": "upload" 寫進設定檔，之後只需帶 --config
+python main.py --cli --config config/sftp_upload_settings.json
+```
+
+設定檔：複製 `example_upload_settings.json` 作為範本（其中 `mode` 已設為 `upload`），依實際值填入後另存到 `config/` 內、檔名以 `_upload_settings.json` 結尾。
+
+GUI：啟動後於右上角「模式」切換到「上傳」，來源/目的地欄位標籤會自動對調（本地端來源路徑、SFTP 目的地路徑），按「開始上傳」即可。
+
+排程整批執行（船上更新）：
+- `python run_all_uploads.py`（或 `script/run_all_uploads.sh`）：只挑選 `config/` 內 `*_upload_settings.json` 依序上傳。
+- `python run_all_downloads.py`（或 `script/run_all_downloads.sh`）：只挑選 `*_download_settings.json` 依序下載。
+- `script/run_sftp_upload.sh`：單一上傳設定檔的範例腳本（指向 `config/sftp_upload_settings.json`）。
+
+> **命名慣例**：`config/` 內的設定檔請以 `*_download_settings.json`（下載）或 `*_upload_settings.json`（上傳）結尾，兩支 `run_all_*` 腳本各自只會挑選對應方向的設定檔，彼此不會誤觸。
+
+---
+
+## 【多來源路徑合併（remote_path 路徑陣列）】
+
+`remote_path` 除了單一字串外也可以填**路徑陣列**，多個來源路徑的內容會依序列出、合併下載到同一個 `local_path`。典型用途是把「全船共用的標準路徑」與「該船專屬的路徑」（可搭配下方佔位符）合併成一個完整專案：
+
+```json
+{
+  "remote_path": [
+    "/fleet/standard_storage/project1",
+    "/fleet/unique_storage/{vsl_name}/project1/config"
+  ],
+  "local_path": "/home/user/project1"
+}
+```
+
+- 各來源路徑各自維持原本的行為（遞迴下載、忽略設定檔、斷點續傳皆適用）；相對路徑一律相對於**各自的來源路徑**，例如上例兩個來源底下的 `a/b.txt` 都會存到 `local_path/a/b.txt`。
+- **不同來源含有相同相對路徑時，以陣列中排後面的來源為準**（前面的不會下載，Log 會記錄一筆警告）。可利用這個特性讓「該船專屬路徑」覆蓋標準路徑中的同名設定檔——把專屬路徑排在陣列後面即可。
+- 任一來源路徑不存在時任務即失敗，Log 會指出是哪一個路徑。
+- CLI 對應寫法是重複指定 `--remote-path /a --remote-path /b`；GUI 的「SFTP 來源路徑」欄位以 `;` 分隔多個路徑。
+
+---
+
+## 【設定值佔位符（依船舶資訊自動展開路徑）】
+
+每台船上裝置若備有船舶基本資訊檔 `../.env/vessel_basic_info.json`（相對於本工具資料夾的上一層，即 `share/.env/vessel_basic_info.json`），內容如：
+```json
+{
+  "vsl_name": "WH289",
+  "ipc": "IPC-1"
+}
+```
+則 `settings.json`（含 `config/` 內的各設定檔）中**所有字串欄位**（含 `remote_path` 路徑陣列裡的每個元素）都可以使用 `{key}` 形式的佔位符，載入設定檔時會自動以該檔案的對應值展開。例如：
+```json
+{
+  "device_name": "{vsl_name}_{ipc}_SFTP_DOWNLOADER",
+  "log_remote_dir": "/fleet/wanhai_nssms_deploy/{vsl_name}/{ipc}/sftp_logs"
+}
+```
+在 WH289 的 IPC-1 上會展開成 `WH289_IPC-1_SFTP_DOWNLOADER` 與 `/fleet/wanhai_nssms_deploy/WH289/IPC-1/sftp_logs`。同一份設定檔即可部署到所有船，不需逐台修改；`device_name` 用佔位符後，`init_device_name.py` 的初始化步驟也不再是必要的。
+
+- 佔位符名稱即 `vessel_basic_info.json` 內的 key，日後該檔案新增欄位即可直接當新佔位符使用。
+- **錯誤即中止**：設定檔有用到佔位符、但船舶資訊檔不存在／JSON 壞掉／找不到對應 key（例如打錯字 `{vslname}`）時，任務直接失敗並說明原因，避免把 `{vsl_name}` 字面文字當成路徑上傳到伺服器產生髒目錄。
+- 設定檔完全沒用到佔位符時，船舶資訊檔可以不存在，行為與原本完全相同。
+- 上傳 Log 時若遠端目錄（含展開後的每船/每機子目錄）尚不存在，會自動逐層建立。
+- 船舶資訊檔路徑可用環境變數 `VESSEL_INFO_PATH` 覆蓋（測試或特殊部署用）。
+- **注意**：GUI 載入設定檔後，畫面顯示的是展開後的實際值；「匯出設定檔」也會寫出展開後的值（佔位符不保留）。要維護佔位符請直接編輯 JSON 檔。另外密碼等欄位若本身含 `{...}` 字樣會被誤認為佔位符而報錯，屬罕見情況，請避免在設定值中使用大括號。
 
 ---
 
@@ -235,7 +325,7 @@ cp example_settings.json settings.json
 
 ## 【開發：執行單元測試】
 
-本工具附有 `tests/` 資料夾內的 pytest 單元測試（涵蓋 `downloader.py`、`settings.py`、`main.py`），所有網路/檔案 I/O 都經過 Mock，不會真的連線到 SFTP 伺服器，可安心在任何環境執行。這份章節只有要修改程式碼或想確認改動沒有破壞既有行為時才需要，一般下載工具的日常使用不需要理會。
+本工具附有 `tests/` 資料夾內的 pytest 單元測試（涵蓋 `downloader.py`、`uploader.py`、`settings.py`、`main.py`），所有網路/檔案 I/O 都經過 Mock，不會真的連線到 SFTP 伺服器，可安心在任何環境執行。這份章節只有要修改程式碼或想確認改動沒有破壞既有行為時才需要，一般日常使用不需要理會。
 
 1. 安裝測試相依套件（僅需一次）：
    ```
@@ -247,11 +337,11 @@ cp example_settings.json settings.json
    ```
 3. 執行測試並在終端機顯示覆蓋率報告（含未覆蓋的行號）：
    ```
-   python -m pytest --cov=downloader --cov=gitignore --cov=settings --cov=main --cov-report=term-missing
+   python -m pytest --cov=downloader --cov=uploader --cov=gitignore --cov=settings --cov=main --cov-report=term-missing
    ```
 4. 若想要更方便瀏覽的 HTML 覆蓋率報告：
    ```
-   python -m pytest --cov=downloader --cov=gitignore --cov=settings --cov=main --cov-report=html
+   python -m pytest --cov=downloader --cov=uploader --cov=gitignore --cov=settings --cov=main --cov-report=html
    ```
    產生的報告在 `htmlcov/index.html`，用瀏覽器開啟即可依檔案、行數檢視覆蓋狀況。
 
