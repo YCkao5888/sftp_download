@@ -524,10 +524,13 @@ class SFTPDownloader(SFTPBase):
                 try:
                     file_list = []
                     for current_root in remote_paths:
-                        file_list.extend(self._list_remote_files(current_root, local_root))
-                except FileNotFoundError:
-                    self.logger.error(f"遠端路徑不存在: {current_root}")
-                    return False
+                        try:
+                            file_list.extend(self._list_remote_files(current_root, local_root))
+                        except FileNotFoundError:
+                            # 單一來源路徑不存在（常見於各船專屬路徑並非每船都有）時，只記警告並略過此來源，
+                            # 其餘存在的來源照常下載。FileNotFoundError 為 OSError 子類，需在此個別攔截，
+                            # 才不會被外層的網路錯誤分支當成連線問題而觸發重連。
+                            self.logger.warning(f"遠端路徑不存在，略過此來源: {current_root}")
                 except (paramiko.SSHException, OSError, EOFError) as e:
                     file_list = None
                     list_attempts += 1
