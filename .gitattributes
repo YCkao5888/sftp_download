@@ -1,0 +1,24 @@
+# 統一換行為 LF：倉庫內一律存 LF，且所有平台 checkout 後工作區也保持 LF
+# 這可覆寫 Windows 端 core.autocrlf=true 導致 LF 被轉成 CRLF 的行為
+* text=auto eol=lf
+
+# Shell 腳本在 Linux 執行，必須維持 LF（CRLF 會導致 bad interpreter 錯誤）
+*.sh   text eol=lf
+
+# 文字類明確標記
+*.py   text eol=lf
+*.txt  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.ini  text eol=lf
+
+# 二進位檔案：完全不做換行轉換
+*.whl  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.gz   binary
+*.zip  binary
+*.pyc  binary
