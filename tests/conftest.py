@@ -22,7 +22,7 @@ def no_real_sleep(monkeypatch):
 @pytest.fixture
 def logger():
     """一般 logging.Logger，交給 pytest 內建的 caplog fixture 擷取訊息斷言用。"""
-    lg = logging.getLogger("sftp_download_test")
+    lg = logging.getLogger("sftp_transfer_test")
     lg.setLevel(logging.DEBUG)
     lg.propagate = True
     lg.handlers.clear()

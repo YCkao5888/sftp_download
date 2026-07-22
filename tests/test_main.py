@@ -57,7 +57,7 @@ class TestRunCliSettingsOnly:
         monkeypatch.setattr(main_module, "SFTPDownloader", FakeDownloader)
         monkeypatch.setattr(
             main_module, "create_logger",
-            lambda log_dir, device_name, version_info="", log_callback=None: (MagicMock(), "fake.csv"),
+            lambda log_dir, device_name, version_info="", log_callback=None, mode="download": (MagicMock(), "fake.csv"),
         )
         return captured
 
@@ -201,7 +201,7 @@ class TestRunCliRemotePathList:
         monkeypatch.setattr(main_module, "SFTPDownloader", FakeDownloader)
         monkeypatch.setattr(
             main_module, "create_logger",
-            lambda log_dir, device_name, version_info="", log_callback=None: (MagicMock(), "fake.csv"),
+            lambda log_dir, device_name, version_info="", log_callback=None, mode="download": (MagicMock(), "fake.csv"),
         )
         data = dict(
             host="10.0.0.5", device_name="edge-1", username="svc", password="pw",
@@ -244,7 +244,7 @@ class TestRunCliPlaceholders:
         monkeypatch.setattr(main_module, "SFTPDownloader", FakeDownloader)
         monkeypatch.setattr(
             main_module, "create_logger",
-            lambda log_dir, device_name, version_info="", log_callback=None: (MagicMock(), "fake.csv"),
+            lambda log_dir, device_name, version_info="", log_callback=None, mode="download": (MagicMock(), "fake.csv"),
         )
         data = dict(
             host="10.0.0.5", device_name="{vsl_name}_{ipc}_edge", username="svc", password="pw",
@@ -368,7 +368,7 @@ class TestRunCliMode:
         monkeypatch.setattr(main_module, "SFTPUploader", make_fake("upload"))
         monkeypatch.setattr(
             main_module, "create_logger",
-            lambda log_dir, device_name, version_info="", log_callback=None: (MagicMock(), "fake.csv"),
+            lambda log_dir, device_name, version_info="", log_callback=None, mode="download": (MagicMock(), "fake.csv"),
         )
         return captured
 

@@ -839,11 +839,14 @@ class TestRun:
         assert result is False
         d._connect_with_retry.assert_called_once()
 
-    def test_remote_path_not_found_returns_false(self, downloader_factory, fake_sftp_factory):
+    def test_remote_path_not_found_skips_with_warning(self, downloader_factory, fake_sftp_factory, caplog):
         d = self._prepare(downloader_factory, fake_sftp_factory, files={})
         d.remote_path = "/remote/missing"
-        result = d.run()
-        assert result is False
+        with caplog.at_level(logging.WARNING):
+            result = d.run()
+        # 來源路徑不存在時記警告並略過該來源（見 commit 8251f01），不再視為整個任務失敗。
+        assert result is True
+        assert any("/remote/missing" in r.message for r in caplog.records)
 
     def test_remote_path_list_merges_all_sources_into_local_path(self, downloader_factory, fake_sftp_factory, tmp_path):
         d = self._prepare(
@@ -868,15 +871,17 @@ class TestRun:
         assert (tmp_path / "config.json").read_bytes() == b"unique"
         assert any("以後面的來源為準" in r.message for r in caplog.records)
 
-    def test_remote_path_list_missing_source_returns_false_and_names_it(self, downloader_factory, fake_sftp_factory, caplog):
+    def test_remote_path_list_missing_source_skips_with_warning_and_names_it(self, downloader_factory, fake_sftp_factory, tmp_path, caplog):
         d = self._prepare(
             downloader_factory, fake_sftp_factory,
             files={"/standard/proj/a.txt": b"A"},
             remote_path=["/standard/proj", "/unique/missing"],
         )
-        with caplog.at_level(logging.ERROR):
-            assert d.run() is False
+        with caplog.at_level(logging.WARNING):
+            assert d.run() is True
+        # 缺少的來源被略過並在 Log 指明，存在的來源照常下載（見 commit 8251f01）。
         assert any("/unique/missing" in r.message for r in caplog.records)
+        assert (tmp_path / "a.txt").read_bytes() == b"A"
 
     def test_listing_error_retries_then_succeeds(self, downloader_factory, fake_sftp_factory):
         d = downloader_factory(wait_for_network=False, retry_count=3)

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# deploy_offline.sh — 離線快速部署腳本 (sftp_download)
+# deploy_offline.sh — 離線快速部署腳本 (sftp_transfer)
 # ---------------------------------------------------------------------------
 # 在「完全沒有對外網路」的環境下，使用 deploy/wheelhouse/ 內預先下載的 wheel
-# 檔案，為 sftp_download 建立一個「專屬 venv」並安裝所有相依套件。
+# 檔案，為 sftp_transfer 建立一個「專屬 venv」並安裝所有相依套件。
 #
 # 專屬 venv 預設路徑（與 radar / SHM 等其他專案的慣例一致）：
-#     ~/venv/wanhai_nssms/share/sftp_download
+#     ~/venv/wanhai_nssms/share/sftp_transfer
 #
 # 目標平台：Linux aarch64 / CPython 3.10 / glibc >= 2.34  (NVIDIA Tegra, mic-733ao)
 #
@@ -38,7 +38,7 @@ SHARE_DIR="$(dirname "$PROJECT_DIR")"
 # 船舶基本資訊檔：供各設定檔的 {vsl_name}/{ipc} 佔位符替換使用（見 settings.py）。
 VESSEL_INFO="${SHARE_DIR}/.env/vessel_basic_info.json"
 
-DEFAULT_VENV="${HOME}/venv/wanhai_nssms/share/sftp_download"
+DEFAULT_VENV="${HOME}/venv/wanhai_nssms/share/sftp_transfer"
 VENV_DIR="${DEFAULT_VENV}"
 PYTHON_BIN=""          # 空字串＝自動偵測（優先 python3.10，與下游 install_env.sh 一致）
 WITH_TESTS=0
@@ -87,7 +87,7 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 echo "==========================================================="
-echo " sftp_download 離線部署 (offline deploy — 專屬 venv)"
+echo " sftp_transfer 離線部署 (offline deploy — 專屬 venv)"
 echo "==========================================================="
 
 # --- 前置檢查 --------------------------------------------------------------
@@ -236,7 +236,7 @@ else
   case "$autostart_ans" in
     ""|Y|y)
       # 捕捉離開碼判讀結果；install_autostart.sh 於非互動/無權限時不會中斷，
-      # 這裡即使回非 0 也只警告，不影響 sftp_download 的部署結果。
+      # 這裡即使回非 0 也只警告，不影響 sftp_transfer 的部署結果。
       set +e
       bash "$AUTOSTART_INSTALLER" --require-linger
       AUTOSTART_RC=$?
