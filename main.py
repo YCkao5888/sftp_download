@@ -149,7 +149,7 @@ def run_cli(args):
     if not key_file and not password:
         password = getpass.getpass(f"請輸入 {username}@{host} 的密碼: ")
 
-    logger, log_file = create_logger(log_dir, device_name, version_info)
+    logger, log_file = create_logger(log_dir, device_name, version_info, mode=mode)
     transfer_cls = SFTPUploader if mode == "upload" else SFTPDownloader
     transfer = transfer_cls(
         host=host,

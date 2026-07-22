@@ -67,15 +67,17 @@ class _CSVFileHandler(logging.Handler):
         super().close()
 
 
-def create_logger(log_dir, device_name, version_info="", log_callback=None):
+def create_logger(log_dir, device_name, version_info="", log_callback=None, mode="download"):
     """device_name 用於標示這份 Log 屬於哪一台設備/使用者（多台 edge device 共用同一 SFTP 帳號時仍可分辨）。
-    version_info 為選填的上傳版號資訊，會一併記錄在 Log 中，不影響任何傳輸邏輯。"""
+    version_info 為選填的上傳版號資訊，會一併記錄在 Log 中，不影響任何傳輸邏輯。
+    mode 決定檔名前綴：download → D_、upload → U_，以便一眼分辨傳輸方向。"""
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     safe_device_name = _FILENAME_UNSAFE.sub("_", device_name).strip() or "unknown"
-    log_file = log_dir / f"sftp_download_{safe_device_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    prefix = "U_" if mode == "upload" else "D_"
+    log_file = log_dir / f"{prefix}{safe_device_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
-    logger = logging.getLogger(f"sftp_downloader.{id(log_file)}")
+    logger = logging.getLogger(f"sftp_transfer.{id(log_file)}")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     logger.propagate = False

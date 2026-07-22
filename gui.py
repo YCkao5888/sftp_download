@@ -425,7 +425,10 @@ class SFTPDownloaderGUI:
 
         log_dir = self.settings.get("log_dir") or DEFAULT_LOG_DIR
         version_info = self.version_info_var.get().strip()
-        logger, log_file = create_logger(log_dir, device_name, version_info, log_callback=self._append_log)
+        logger, log_file = create_logger(
+            log_dir, device_name, version_info, log_callback=self._append_log,
+            mode="upload" if is_upload else "download",
+        )
         transfer_cls = SFTPUploader if is_upload else SFTPDownloader
         self.downloader = transfer_cls(
             host=host,
